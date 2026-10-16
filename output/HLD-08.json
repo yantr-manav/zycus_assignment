@@ -1,0 +1,51 @@
+{
+  "file": "HLD-08.pdf",
+  "payables": [
+    {
+      "invoice_number": "162547",
+      "invoice_date": "2026-05-19",
+      "due_date": "",
+      "invoice_type": "INVOICE",
+      "currency": "ZAR",
+      "supplier": {
+        "name": "Cloverdale Partners CC",
+        "supplier_id": "",
+        "address": "PO Box 2505\nMarket Road 73\nRua do Ouro 138\n4300",
+        "vat_id": "2731114415"
+      },
+      "buyer": {
+        "company_code": "",
+        "business_unit_code": "",
+        "location_code": ""
+      },
+      "payment_term_id": "",
+      "po_number": "",
+      "po_id": "",
+      "gross_total": "148941.47",
+      "subtotal": "129514.32",
+      "total_tax_amount": "19427.15",
+      "discount_amount": "0.00",
+      "freight_charges": "",
+      "insurance_charges": "",
+      "extra_charges": "",
+      "excise_duties": "",
+      "taxes": [],
+      "line_items": [
+        {
+          "description": "Hall's Smooth Fruit Punch 1lt M 337521",
+          "item_type": "GOODS",
+          "uom": "1000",
+          "quantity": "468",
+          "unit_price": "276.74",
+          "total": "129514.32",
+          "discount": "",
+          "discount_percentage": "",
+          "tax_rate": "15",
+          "tax_amount": "19427.15",
+          "taxes": []
+        }
+      ]
+    }
+  ],
+  "declined": []
+}

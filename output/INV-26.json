@@ -1,0 +1,142 @@
+{
+  "file": "INV-26.pdf",
+  "payables": [
+    {
+      "invoice_number": "",
+      "invoice_date": "",
+      "due_date": "",
+      "invoice_type": "INVOICE",
+      "currency": "MYR",
+      "supplier": {
+        "name": "",
+        "supplier_id": "",
+        "address": "",
+        "vat_id": ""
+      },
+      "buyer": {
+        "company_code": "",
+        "business_unit_code": "",
+        "location_code": ""
+      },
+      "payment_term_id": "",
+      "po_number": "",
+      "po_id": "",
+      "gross_total": "",
+      "subtotal": "",
+      "total_tax_amount": "",
+      "discount_amount": "5.00",
+      "freight_charges": "",
+      "insurance_charges": "",
+      "extra_charges": "",
+      "excise_duties": "",
+      "taxes": [],
+      "line_items": [
+        {
+          "description": "Wem sx905,",
+          "item_type": "GOODS",
+          "uom": "",
+          "quantity": "2",
+          "unit_price": "1095.00",
+          "total": "2190.00",
+          "discount": "",
+          "discount_percentage": "",
+          "tax_rate": "",
+          "tax_amount": "",
+          "taxes": []
+        },
+        {
+          "description": "PEEL FRESH MANGO 1L",
+          "item_type": "GOODS",
+          "uom": "",
+          "quantity": "2",
+          "unit_price": "650.00",
+          "total": "1380.00",
+          "discount": "100.00",
+          "discount_percentage": "",
+          "tax_rate": "",
+          "tax_amount": "",
+          "taxes": []
+        },
+        {
+          "description": "NOIMOEDROOTCHIPS 6G",
+          "item_type": "GOODS",
+          "uom": "",
+          "quantity": "2",
+          "unit_price": "360.00",
+          "total": "720.00",
+          "discount": "",
+          "discount_percentage": "",
+          "tax_rate": "",
+          "tax_amount": "",
+          "taxes": []
+        },
+        {
+          "description": "eK)",
+          "item_type": "GOODS",
+          "uom": "",
+          "quantity": "1",
+          "unit_price": "720.00",
+          "total": "720.00",
+          "discount": "",
+          "discount_percentage": "",
+          "tax_rate": "",
+          "tax_amount": "",
+          "taxes": []
+        },
+        {
+          "description": "CPS SALT N 186,",
+          "item_type": "GOODS",
+          "uom": "",
+          "quantity": "2",
+          "unit_price": "1850.00",
+          "total": "3100.00",
+          "discount": "",
+          "discount_percentage": "",
+          "tax_rate": "",
+          "tax_amount": "",
+          "taxes": []
+        },
+        {
+          "description": "Tons Nur HONEY 140M",
+          "item_type": "GOODS",
+          "uom": "",
+          "quantity": "2",
+          "unit_price": "700.00",
+          "total": "3400.00",
+          "discount": "",
+          "discount_percentage": "",
+          "tax_rate": "",
+          "tax_amount": "",
+          "taxes": []
+        },
+        {
+          "description": "R snes",
+          "item_type": "GOODS",
+          "uom": "",
+          "quantity": "2",
+          "unit_price": "1820.00",
+          "total": "3040.00",
+          "discount": "0.00",
+          "discount_percentage": "",
+          "tax_rate": "",
+          "tax_amount": "",
+          "taxes": []
+        },
+        {
+          "description": "ceownare 006",
+          "item_type": "GOODS",
+          "uom": "",
+          "quantity": "1",
+          "unit_price": "490.00",
+          "total": "490.00",
+          "discount": "",
+          "discount_percentage": "",
+          "tax_rate": "",
+          "tax_amount": "",
+          "taxes": []
+        }
+      ]
+    }
+  ],
+  "declined": []
+}

@@ -1,0 +1,10 @@
+{
+  "file": "DU-08.pdf",
+  "payables": [],
+  "declined": [
+    {
+      "doc_type": "STATEMENT",
+      "reason": "Dunning letters (Mahnungen) and statements are non-payable documents under AP rules."
+    }
+  ]
+}

@@ -1,0 +1,59 @@
+{
+  "file": "DU-11.pdf",
+  "payables": [
+    {
+      "invoice_number": "6265-K",
+      "invoice_date": "2025-03-16",
+      "due_date": "2025-03-16",
+      "invoice_type": "CREDIT_MEMO",
+      "currency": "EUR",
+      "supplier": {
+        "name": "Tavolo O\u00dc",
+        "supplier_id": "",
+        "address": "",
+        "vat_id": ""
+      },
+      "buyer": {
+        "company_code": "",
+        "business_unit_code": "",
+        "location_code": ""
+      },
+      "payment_term_id": "",
+      "po_number": "",
+      "po_id": "",
+      "gross_total": "400.00",
+      "subtotal": "327.87",
+      "total_tax_amount": "72.13",
+      "discount_amount": "",
+      "freight_charges": "",
+      "insurance_charges": "",
+      "extra_charges": "",
+      "excise_duties": "",
+      "taxes": [
+        {
+          "tax_type": "VAT",
+          "tax_name": "KM",
+          "tax_rate": "22",
+          "tax_amount": "72.13",
+          "tax_type_code": "EST_220_VAT"
+        }
+      ],
+      "line_items": [
+        {
+          "description": "Toitlustamine Tavolo 11.03.25",
+          "item_type": "SERVICE",
+          "uom": "tk",
+          "quantity": "1",
+          "unit_price": "327.868852",
+          "total": "327.87",
+          "discount": "",
+          "discount_percentage": "",
+          "tax_rate": "",
+          "tax_amount": "",
+          "taxes": []
+        }
+      ]
+    }
+  ],
+  "declined": []
+}

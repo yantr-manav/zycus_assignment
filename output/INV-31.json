@@ -1,0 +1,181 @@
+{
+  "file": "INV-31.pdf",
+  "payables": [
+    {
+      "invoice_number": "39015",
+      "invoice_date": "2018-06-01",
+      "due_date": "2018-06-18",
+      "invoice_type": "INVOICE",
+      "currency": "USD",
+      "supplier": {
+        "name": "100 Airport KPG III, LLC.",
+        "supplier_id": "",
+        "address": "Suite 400\n125 E Elm Street\nConshohocken, PA 19428",
+        "vat_id": ""
+      },
+      "buyer": {
+        "company_code": "",
+        "business_unit_code": "",
+        "location_code": ""
+      },
+      "payment_term_id": "",
+      "po_number": "16299",
+      "po_id": "",
+      "gross_total": "17657.53",
+      "subtotal": "",
+      "total_tax_amount": "",
+      "discount_amount": "",
+      "freight_charges": "",
+      "insurance_charges": "",
+      "extra_charges": "",
+      "excise_duties": "",
+      "taxes": [],
+      "line_items": [
+        {
+          "description": "Customer Charge",
+          "item_type": "SERVICE",
+          "uom": "",
+          "quantity": "1",
+          "unit_price": "299.78",
+          "total": "299.78",
+          "discount": "",
+          "discount_percentage": "",
+          "tax_rate": "",
+          "tax_amount": "",
+          "taxes": []
+        },
+        {
+          "description": "Distribution Charges",
+          "item_type": "SERVICE",
+          "uom": "kW",
+          "quantity": "475",
+          "unit_price": "4.77000",
+          "total": "2265.75",
+          "discount": "",
+          "discount_percentage": "",
+          "tax_rate": "",
+          "tax_amount": "",
+          "taxes": []
+        },
+        {
+          "description": "Distribution Charges",
+          "item_type": "SERVICE",
+          "uom": "kWh",
+          "quantity": "219744",
+          "unit_price": "-0.00100",
+          "total": "-219.74",
+          "discount": "",
+          "discount_percentage": "",
+          "tax_rate": "",
+          "tax_amount": "",
+          "taxes": []
+        },
+        {
+          "description": "Distribution System Improvement Charge",
+          "item_type": "SERVICE",
+          "uom": "",
+          "quantity": "1",
+          "unit_price": "13.98",
+          "total": "13.98",
+          "discount": "",
+          "discount_percentage": "",
+          "tax_rate": "",
+          "tax_amount": "",
+          "taxes": []
+        },
+        {
+          "description": "Energy Eff & Nonbypassable Trans",
+          "item_type": "SERVICE",
+          "uom": "kW",
+          "quantity": "401",
+          "unit_price": "0.98000",
+          "total": "392.98",
+          "discount": "",
+          "discount_percentage": "",
+          "tax_rate": "",
+          "tax_amount": "",
+          "taxes": []
+        },
+        {
+          "description": "ADJUSTMENT",
+          "item_type": "SERVICE",
+          "uom": "",
+          "quantity": "1",
+          "unit_price": "-0.01",
+          "total": "-0.01",
+          "discount": "",
+          "discount_percentage": "",
+          "tax_rate": "",
+          "tax_amount": "",
+          "taxes": []
+        },
+        {
+          "description": "ENERGY CHARGE",
+          "item_type": "SERVICE",
+          "uom": "KH",
+          "quantity": "219744",
+          "unit_price": "0.0595",
+          "total": "13074.77",
+          "discount": "",
+          "discount_percentage": "",
+          "tax_rate": "",
+          "tax_amount": "",
+          "taxes": []
+        },
+        {
+          "description": "Gross Receipts Tax",
+          "item_type": "TAX",
+          "uom": "",
+          "quantity": "1",
+          "unit_price": "819.80",
+          "total": "819.80",
+          "discount": "",
+          "discount_percentage": "",
+          "tax_rate": "",
+          "tax_amount": "",
+          "taxes": []
+        },
+        {
+          "description": "Sales Tax",
+          "item_type": "TAX",
+          "uom": "",
+          "quantity": "1",
+          "unit_price": "845.35",
+          "total": "845.35",
+          "discount": "",
+          "discount_percentage": "",
+          "tax_rate": "",
+          "tax_amount": "",
+          "taxes": []
+        },
+        {
+          "description": "State Tax Adjustment",
+          "item_type": "TAX",
+          "uom": "",
+          "quantity": "1",
+          "unit_price": "-0.28",
+          "total": "-0.28",
+          "discount": "",
+          "discount_percentage": "",
+          "tax_rate": "",
+          "tax_amount": "",
+          "taxes": []
+        },
+        {
+          "description": "Sales Tax",
+          "item_type": "TAX",
+          "uom": "",
+          "quantity": "1",
+          "unit_price": "165.15",
+          "total": "165.15",
+          "discount": "",
+          "discount_percentage": "",
+          "tax_rate": "",
+          "tax_amount": "",
+          "taxes": []
+        }
+      ]
+    }
+  ],
+  "declined": []
+}

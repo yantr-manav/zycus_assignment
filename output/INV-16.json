@@ -1,0 +1,80 @@
+{
+  "file": "INV-16.pdf",
+  "payables": [
+    {
+      "invoice_number": "TLLIR72836045",
+      "invoice_date": "2009-06-25",
+      "due_date": "2007-07-25",
+      "invoice_type": "INVOICE",
+      "currency": "EUR",
+      "supplier": {
+        "name": "Northwind Operations O\u00dc",
+        "supplier_id": "",
+        "address": "VANA-L\u00d5UNA TN 15\n10134 TALLINN\nESTONIA",
+        "vat_id": "EE445462206"
+      },
+      "buyer": {
+        "company_code": "",
+        "business_unit_code": "",
+        "location_code": ""
+      },
+      "payment_term_id": "",
+      "po_number": "",
+      "po_id": "",
+      "gross_total": "26.47",
+      "subtotal": "21.70",
+      "total_tax_amount": "4.77",
+      "discount_amount": "",
+      "freight_charges": "",
+      "insurance_charges": "",
+      "extra_charges": "",
+      "excise_duties": "",
+      "taxes": [],
+      "line_items": [
+        {
+          "description": "ECONOMY SELECT",
+          "item_type": "SERVICE",
+          "uom": "V",
+          "quantity": "1",
+          "unit_price": "18.87",
+          "total": "18.87",
+          "discount": "",
+          "discount_percentage": "",
+          "tax_rate": "",
+          "tax_amount": "",
+          "taxes": [
+            {
+              "tax_type": "VAT",
+              "tax_name": "KM",
+              "tax_rate": "22",
+              "tax_amount": "4.15",
+              "tax_type_code": "EST_220_VAT"
+            }
+          ]
+        },
+        {
+          "description": "FUEL SURCHARGE",
+          "item_type": "SERVICE",
+          "uom": "",
+          "quantity": "1",
+          "unit_price": "2.83",
+          "total": "2.83",
+          "discount": "",
+          "discount_percentage": "",
+          "tax_rate": "",
+          "tax_amount": "",
+          "taxes": [
+            {
+              "tax_type": "VAT",
+              "tax_name": "KM",
+              "tax_rate": "22",
+              "tax_amount": "0.62",
+              "tax_type_code": "EST_220_VAT"
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "declined": []
+}

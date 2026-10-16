@@ -1,0 +1,26 @@
+# Secrets and local environment — never commit
+.env
+.env.*
+!.env.example
+
+# Virtual environments and caches
+.venv/
+venv/
+__pycache__/
+.pytest_cache/
+*.pyc
+*.pyo
+
+# Diagnostics are local-only; the graded artifacts live in output/ and ARE tracked
+logs/*.jsonl
+logs/*.json
+logs/*.log
+
+# Assignment materials that must never be part of the submission repo
+candidate_kit-2.zip
+reviewer-kit*/
+candidate_kit*/
+
+# OS noise
+.DS_Store
+Thumbs.db

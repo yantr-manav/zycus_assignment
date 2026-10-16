@@ -1,0 +1,10 @@
+{
+  "file": "DU-09.pdf",
+  "payables": [],
+  "declined": [
+    {
+      "doc_type": "OTHER",
+      "reason": "Non-payable internal approval form and email correspondence; no vendor invoice or credit memo is present."
+    }
+  ]
+}

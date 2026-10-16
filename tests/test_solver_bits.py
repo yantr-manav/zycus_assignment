@@ -16,7 +16,7 @@ def test_key_pool_parsing_supports_mixed_formats_and_separators():
 
 
 def test_redaction_never_leaks_key_material():
-    secret = "AIzaSyABCDEFGHIJKLMNOPQRSTUV1234567890"
+    secret = "AIzaFAKEFORREDACTOINTESTONLY0000000000"
     redacted = redact(f"request failed with key {secret} at URL")
     assert secret not in redacted
     assert "[REDACTED]" in redacted

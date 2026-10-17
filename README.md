@@ -24,28 +24,35 @@ PDF folder
    ├── PyMuPDF: embedded text + page rendering
    ├── Tesseract OCR (bounded, concurrent, on-demand completion)
    │
-   ├── LLM router (provider + model ladder, key pool, pacing)
+   ├── LLM router (provider + model ladders, key pools, pacing, budgets)
    │     ├── Gemini vision — page images + page-labelled text
+   │     ├── OpenRouter vision — free vision models, reasoning disabled
+   │     ├── Cloudflare Workers AI vision — verified vision models only
    │     └── Groq text — JSON mode; long documents auto-split into
    │        page-aware parts and merged (token-limited free tier)
    │
-   ├── Typed-shape normalization + deterministic component resolver
+   ├── Typed-shape normalization
+   ├── Deterministic repairs (math-certain, exact-match gated):
+   │     line quantities pinned by printed row arithmetic → duplicated
+   │     tax levels cleared → printed-formula tax products snapped
    ├── Master resolver — suppliers / tax / buyer org / terms / PO
    ├── Exact schema checks + quality checks + erp_book() reconciliation
+   ├── Completeness check — line sums that reproduce no printed total
+   │     trigger ONE corrective re-read (verified gap as the signal)
    ├── Signal-driven repair loop (≤ REPAIR_ROUNDS, warm conversation)
    │     facts from the ERP → model judgment → grounded, verifiable edits
    └── output/<PDF-stem>.json + logs/run.jsonl
 ```
 
-The components are intentionally separated. The LLM interprets the document and owns judgment; ordinary Python owns numeric normalization, schema checks, matching, path allow-lists, deterministic component restoration, and the final accounting recomputation. See [ARCHITECTURE.md](ARCHITECTURE.md) for the flow diagram, the repair protocol, and the provider/quota design. See [DESIGN.md](DESIGN.md) for what the documents actually teach. See [VERIFICATION.md](VERIFICATION.md) for what was actually run and what is still open.
+The components are intentionally separated. The LLM interprets the document and owns judgment; ordinary Python owns numeric normalization, schema checks, matching, path allow-lists, the math-certain repairs, and the final accounting recomputation. See [ARCHITECTURE.md](ARCHITECTURE.md) for the flow diagram, the repair protocol, and the provider/quota design. See [DESIGN.md](DESIGN.md) for what the documents actually teach. See [VERIFICATION.md](VERIFICATION.md) for what was actually run, document by document.
 
 ## 3. Setup
 
 ### Prerequisites
 
 - Python 3.10+.
-- A Gemini API key (Google AI Studio) and/or Groq API key (Groq Console).
-- Tesseract OCR for scanned-page text (used for evidence verification and text-only routes; the vision route still works without it, but repairs on scanned pages then fail closed). The code auto-discovers common install locations and honours `TESSERACT_CMD`.
+- At least one provider credential: Gemini (Google AI Studio), Groq (Groq Console), OpenRouter (openrouter.ai), and/or Cloudflare Workers AI (`CLOUDFLARE_ACCOUNT_ID` + `CLOUDFLARE_API_TOKEN`). The router uses whichever are configured.
+- Tesseract OCR for scanned-page text (used for evidence verification and text-only routes; the vision routes still work without it, but repairs on scanned pages then fail closed). The code auto-discovers common install locations and honours `TESSERACT_CMD`.
 - Optional: Docker (see §8).
 
 ### Install (Windows PowerShell)
@@ -70,11 +77,15 @@ Everything below is real behavior observed against free-tier quotas; the pipelin
   GEMINI_API_KEYS=key1 key2            # explicit list
   GEMINI_API_KEY_2=key2                # numbered extras (_2.._9)
   ```
-  Keys are health-tracked and rotated: an auth-invalid key is dropped for the session; a quota-limited key cools down for the provider's own retry window; the others take over. Key values never reach a log line — every error string passes through a redactor.
-- **Daily quota is per model.** Free-tier Gemini limits requests per model per day (observed: `20/day` for a flash model, reset window returned by the API as a multi-hour retry delay). The router therefore carries a **model ladder** (`GEMINI_MODEL` + `GEMINI_FALLBACK_MODELS`) and rolls to the next model when one bucket is exhausted, and to the next provider when all are. The same ladder exists for Groq (`GROQ_MODEL` + `GROQ_FALLBACK_MODELS`, e.g. `openai/gpt-oss-120b`, `qwen/qwen3.8-27b`).
+  Keys are health-tracked and rotated: an auth-invalid key is dropped for the session; a quota-limited key cools down for the provider's own retry window; the others take over. Key values never reach a log line — every error string passes through a redactor, and `Settings.__repr__` redacts key fields so tracebacks cannot leak them either.
+- **Four providers, verified live.** Gemini (vision), Groq (text), OpenRouter (vision-capable free models), and Cloudflare Workers AI (vision) are first-class routes with the same key pooling, health states, and per-model ladders:
+  - **Gemini** — per-model daily buckets (observed `20/day` on this account); rolls model-by-model, then provider-by-provider. Worst-case per-document wall time is bounded by `EXTRACT_BUDGET_SECONDS`/`REPAIR_BUDGET_SECONDS`.
+  - **Groq** — token-metered (observed `8,000 tokens/minute`); long documents auto-split into page-aware parts (`GROQ_MAX_DOCUMENT_CHARS`) and merge; per-model completion caps enforced (qwen: 16,384).
+  - **OpenRouter** — free-model quota verified via the key endpoint (`50 free-model requests/day`); extraction turns explicitly disable reasoning (`reasoning: {enabled: false}`) because reasoning models otherwise burn the whole token budget before emitting JSON; upstream-rate-limited models are parked briefly without poisoning the key.
+  - **Cloudflare Workers AI** — OpenAI-compatible route; vision gated by a verified model registry so images are never sent to a text-only model; neuron-metered (≈0.5 neurons per page call observed).
+  - `PROVIDER_LADDER_VISION` / `PROVIDER_LADDER_TEXT` control the order; unavailable providers are skipped fast instead of sleeping through cooldowns.
 - **A daily limit is never slept through.** Cooldowns longer than the batch window fail that route fast and move on; short rate-limit cooldowns wait briefly. `MIN_CALL_INTERVAL_SECONDS` (default 5 s) paces requests under per-minute limits.
-- **Groq free tier is token-limited** (observed: 8,000 tokens/minute). Long scan dossiers exceed it in one request, so the text route auto-splits the document into page-aware parts below `GROQ_MAX_DOCUMENT_CHARS` and merges the payables (deduplicating an invoice that spans a part boundary). Smaller models may also cap completion tokens (qwen: 16,384) — the router clamps per model.
-- **Budget a full pass.** One request per document on the chosen route, plus at most `REPAIR_ROUNDS` extra requests for documents that fail to reconcile. `--limit` and `--only` let you spend quota only where it matters.
+- **Budget a full pass.** One request per document on the chosen route, plus at most `REPAIR_ROUNDS` extra requests for documents that fail to reconcile and one corrective re-read only when the completeness check finds lines that reproduce no printed total. `--limit` and `--only` let you spend quota only where it matters.
 - **Free-tier data note:** provider pricing pages indicate free-tier content may be used to improve provider products. Do not send confidential financial documents through free tiers without a data-handling decision; use a business/paid arrangement for production.
 
 Example `.env`:
@@ -82,13 +93,24 @@ Example `.env`:
 ```dotenv
 GEMINI_API_KEY=your_gemini_key_or_pool_here
 GROQ_API_KEY=your_groq_key_here
+OPENROUTER_API_KEY=your_openrouter_key_here
+CLOUDFLARE_API_TOKEN=your_workers_ai_token
+CLOUDFLARE_ACCOUNT_ID=your_account_id
 GEMINI_MODEL=gemini-3.8-flash
 GEMINI_FALLBACK_MODELS=gemini-3.6-flash,gemini-3-flash-preview,gemini-2.5-flash
-GROQ_MODEL=openai/gpt-oss-20b
-GROQ_FALLBACK_MODELS=openai/gpt-oss-120b,qwen/qwen3.8-27b
+GROQ_MODEL=qwen/qwen3.8-27b
+GROQ_FALLBACK_MODELS=openai/gpt-oss-120b,openai/gpt-oss-20b
+OPENROUTER_MODEL=nvidia/nemotron-3.5-super-vl:free
+OPENROUTER_FALLBACK_MODELS=google/gemma-4-31b-it:free,dots-studio/dots-3-note-preview:free
+CF_MODEL=@cf/meta/llama-4-scout-17b-16e-instruct
+CF_FALLBACK_MODELS=@cf/meta/llama-3.2-11b-vision-instruct
+PROVIDER_LADDER_VISION=gemini,openrouter,cloudflare,groq
+PROVIDER_LADDER_TEXT=groq,openrouter,cloudflare,gemini
 PAYABLE_AI_PROVIDER=auto
 MIN_CALL_INTERVAL_SECONDS=5
 REPAIR_ROUNDS=2
+EXTRACT_BUDGET_SECONDS=480
+REPAIR_BUDGET_SECONDS=240
 GROQ_MAX_DOCUMENT_CHARS=8000
 MAX_VISION_PAGES=20
 PDF_RENDER_DPI=120
@@ -140,15 +162,15 @@ Each output matches the candidate brief's outer shape (`file`, `payables[]`, `de
 
 ## 6. How the solver works (for reviewers)
 
-The loop is the point, so here is the machinery in one paragraph each: **(1) Signals, not instructions** — `payable_ai/signals.py` computes an ERP trace (per-line base from `quantity × unit_price − discounts`, per-tax contributions and their bases, header net base, charges) that is refused unless it sums to the sealed `erp_book()` result, then states deltas as facts (“the ERP derives 100.00 on this line; the page prints 119.00”). The model chooses the remedy. **(2) Determinism boundary at ambiguity** — math-certain components (a quantity uniquely pinned by printed row arithmetic; a neutralization whose candidate lands exactly on the printed gross) are owned by deterministic code; everything that requires world knowledge or document inference is the model’s call. **(3) One flowing context, cache-friendly** — the extraction reference is a byte-stable prefix; the repair turn continues the *same conversation* (the model re-sees its own draft and the page images) instead of re-sending a fragmented prompt. **(4) Cost routing** — vision only where layout matters, a text route for searchable documents, per-model fallback ladders, free-tier pacing, and per-document spend that ends the moment reconciliation passes.
+The loop is the point, so here is the machinery in one paragraph each: **(1) Signals, not instructions** — `payable_ai/signals.py` computes an ERP trace (per-line base from `quantity × unit_price − discounts`, per-tax contributions and their bases, header net base, charges) that is refused unless it sums to the sealed `erp_book()` result, then states deltas as facts (“the ERP derives 100.00 on this line; the page prints 119.00”). The model chooses the remedy. **(2) Determinism boundary at ambiguity** — math-certain repairs are owned by deterministic code, each exact-match gated against the document's own printed gross: a quantity uniquely pinned by printed row arithmetic is restored (locale misreads, pack scaling); the same tax placed at both levels is de-duplicated (`resolve_duplicate_taxes`); a tax displayed rounded but derived from a printed rate × printed base is snapped to the exact product (`recompute_printed_formula_taxes`). Everything requiring world knowledge or document inference stays the model's call. **(3) One flowing context, cache-friendly** — the extraction reference is a byte-stable prefix; on Gemini the repair turn continues the *same conversation* (the model re-sees its own draft and the page images). On the stateless OpenAI-compatible routes (OpenRouter/Cloudflare), repairs run text-only over the OCR/native transcript — the same text the grounding gate verifies quotes against — because re-uploading the page images on every turn made free-tier calls arbitrarily slow. **(4) Cost routing** — vision only where layout matters, a text route for searchable documents, per-model fallback ladders, free-tier pacing, per-call read timeouts and per-document wall-clock budgets, and spend that ends the moment reconciliation passes. **(5) Completeness re-read** — when the extracted line amounts reproduce none of the document's printed totals (rows dropped or mis-transcribed — a transcription deficiency, not a placement one), one corrective re-read of the same document runs with the verified gap as a signal, and the better-scoring attempt is kept.
 
 ## 7. Known limits (kept honest)
 
 - OCR can confuse separators, `0/O`, `1/I`, minus signs, and table columns; a low-confidence page routes to vision, never to silent confidence.
-- Some documents are **not deterministically reconcilable from the page alone** (e.g. an embedded excise duty whose per-line split exists only as an inference). Those are flagged for review — never “fixed” by inventing a per-line duty. See `DESIGN.md` for the specific document.
-- The component resolver only restores quantities when the arithmetic is exact; ambiguous cases are left to extraction and the repair loop.
-- A tax-inclusive or pack-scaled line requires the model to translate the printed presentation into ERP components; the layer verifies the result, it cannot manufacture the translation.
-- Buyer identity can be genuinely absent from a document; a blank code is the correct answer then, not a guess.
+- Dense tables need a strong reader: on the 35-row Malaysian invoice, two independent high-magnification reads (and a free-tier vision model) missed a row whose amount is printed beside a section label; the completeness signal caught the un-footable draft, and the strong vision pass found the row. Free-tier models are economical, not infallible — review the flagged warnings.
+- The deterministic repairs only fire on exact arithmetic; ambiguous cases are left to extraction and the repair loop. A tax-inclusive or pack-scaled line requires the model to translate the printed presentation into ERP components; the layer verifies the result, it cannot manufacture the translation.
+- Buyer identity, currencies and invoice numbers can be genuinely absent from a document; a blank is the correct answer then, not a guess (four such warnings are documented in `VERIFICATION.md`).
+- Free tiers have hard, documented quotas (per-model daily buckets, token-per-minute caps, free-model request caps). The ladders, pacing, budgets and resumability make a batch survivable, not instant.
 
 ## 8. Docker (alternative single command)
 

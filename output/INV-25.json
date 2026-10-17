@@ -11,7 +11,7 @@
         "name": "Fairmont Services LDA",
         "supplier_id": "",
         "address": "High Street 34\n1000-137 LISBOA",
-        "vat_id": "PT029461956"
+        "vat_id": "PT456472637"
       },
       "buyer": {
         "company_code": "",
@@ -19,28 +19,28 @@
         "location_code": ""
       },
       "payment_term_id": "Net_30",
-      "po_number": "",
+      "po_number": "9448",
       "po_id": "",
       "gross_total": "176.00",
       "subtotal": "143.09",
       "total_tax_amount": "32.91",
-      "discount_amount": "0.00",
-      "freight_charges": "0.00",
+      "discount_amount": "",
+      "freight_charges": "",
       "insurance_charges": "",
       "extra_charges": "",
       "excise_duties": "",
       "taxes": [
         {
-          "tax_type": "VAT",
+          "tax_type": "IVA",
           "tax_name": "IVA",
           "tax_rate": "23",
           "tax_amount": "32.91",
-          "tax_type_code": ""
+          "tax_type_code": "PT_230_IVA"
         }
       ],
       "line_items": [
         {
-          "description": "FOT./IMPRESS\u00c3O A4 CORES 1 ESTUD.",
+          "description": "FOT./IMPRESSAO A4 CORES",
           "item_type": "GOODS",
           "uom": "UNI",
           "quantity": "400",
@@ -48,25 +48,25 @@
           "total": "160.00",
           "discount": "",
           "discount_percentage": "",
-          "tax_rate": "23",
+          "tax_rate": "",
           "tax_amount": "",
           "taxes": []
         },
         {
-          "description": "FOLHA 80g",
+          "description": "FOLHA 80g BRANCO A4",
           "item_type": "GOODS",
           "uom": "UNI",
           "quantity": "400",
-          "unit_price": "0.000000",
+          "unit_price": "0.000",
           "total": "0.00",
           "discount": "",
           "discount_percentage": "",
-          "tax_rate": "23",
+          "tax_rate": "",
           "tax_amount": "",
           "taxes": []
         },
         {
-          "description": "FOLHA 120g",
+          "description": "FOLHA 120g BRANCO A4",
           "item_type": "GOODS",
           "uom": "UNI",
           "quantity": "200",
@@ -74,7 +74,7 @@
           "total": "16.00",
           "discount": "",
           "discount_percentage": "",
-          "tax_rate": "23",
+          "tax_rate": "",
           "tax_amount": "",
           "taxes": []
         }

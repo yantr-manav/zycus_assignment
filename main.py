@@ -18,7 +18,7 @@ def parser() -> argparse.ArgumentParser:
     p.add_argument("--output", type=Path, default=ROOT / "output", help="Folder to write one JSON per PDF")
     p.add_argument("--master-data", type=Path, default=ROOT / "master_data", help="Folder containing Zycus master-data JSON files")
     p.add_argument("--log-dir", type=Path, default=ROOT / "logs", help="Diagnostics folder; does not go in submitted payable JSON")
-    p.add_argument("--provider", choices=["auto", "gemini", "groq"], default=None, help="Override PAYABLE_AI_PROVIDER")
+    p.add_argument("--provider", choices=["auto", "gemini", "groq", "openrouter", "cloudflare"], default=None, help="Override PAYABLE_AI_PROVIDER")
     p.add_argument("--limit", type=int, default=None, help="Process only first N PDFs (smoke testing)")
     p.add_argument("--only", type=str, default=None, help="Comma-separated stems/globs to process (e.g. INV-01,DU-0*)")
     p.add_argument("--diagnose", action="store_true", help="PDF ingestion inventory only; does not call an LLM")

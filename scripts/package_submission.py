@@ -24,7 +24,8 @@ from payable_ai.validation import reconcile, shape_errors
 
 CORE_FILES = [
     ".env.example", "README.md", "DESIGN.md", "ARCHITECTURE.md", "AUTODRAFT_SCHEMA.md",
-    "requirements.txt", "main.py", "erp.py", "example_check.py", "sample_autodraft.json", "VERIFICATION.md",
+    "requirements.txt", "main.py", "erp.py", "example_check.py", "sample_autodraft.json",
+    "VERIFICATION.md", "REVIEW_NOTES.md", "Dockerfile", ".dockerignore",
 ]
 CORE_DIRS = ["documents", "master_data", "payable_ai", "tests", "scripts"]
 
@@ -190,7 +191,9 @@ def main() -> int:
             continue
         if rel.parts[0] in {"logs", "tmp_smoke"}:
             continue
-        if path.suffix in {".pyc", ".pyo"}:
+        if any(part in {".git", "reviewer-kit 1", "reviewer-kit", "candidate_kit-2"} for part in rel.parts):
+            continue
+        if path.suffix in {".pyc", ".pyo", ".zip"}:
             continue
         clean.append(path)
     target.unlink(missing_ok=True)

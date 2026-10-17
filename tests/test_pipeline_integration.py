@@ -14,7 +14,7 @@ from payable_ai.pipeline import process_one
 
 class FakeRouter:
     def __init__(self, payload): self.payload = payload
-    def extract(self, doc, filename): return LLMResult(self.payload, "groq", "fake-test-model", ["groq:success"])
+    def extract(self, doc, filename, **kwargs): return LLMResult(self.payload, "groq", "fake-test-model", ["groq:success"])
     def repair(self, *args, **kwargs): raise AssertionError("matching sample should not require repair")
 
 
@@ -61,7 +61,7 @@ class RepairingRouter:
         self.repair_payload = repair_payload
         self.repair_calls = 0
 
-    def extract(self, doc, filename):
+    def extract(self, doc, filename, **kwargs):
         return LLMResult(self.payload, "groq", "fake-test-model", ["groq:success"])
 
     def repair(self, *args, **kwargs):
@@ -151,7 +151,11 @@ def test_reconcile_repair_loop_rejects_ungrounded_change(tmp_path, monkeypatch):
     result = json.loads((outdir / "REP-2.json").read_text(encoding="utf-8"))
     assert result["payables"][0]["line_items"][0]["unit_price"] == "40.00"
     assert diag["payables"][0]["validation"]["status"] == "MISMATCH"
-    assert router.repair_calls == 1  # no accepted change: the loop stops instead of spinning
+    # One bounded repair per attempt (an ungrounded change never loops within an
+    # attempt); the deterministic completeness re-read adds exactly one more
+    # attempt, and the better-scoring attempt is kept.
+    assert router.repair_calls == 2
+    assert diag.get("completeness_reextract") == "attempted (kept the better attempt)"
 
 
 def test_validate_output_reports_missing_files_without_api(tmp_path):

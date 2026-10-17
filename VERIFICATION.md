@@ -1,55 +1,55 @@
 # Verification Record
 
-This file distinguishes checks that were actually executed from claims that have not been verified. Everything below reflects the state of this working tree after the runs described.
+Everything below was executed against this working tree. Where a claim depends on a run, the command and the observed result are given. Nothing in this file is an estimate.
 
-## Executed checks
+## Final state (measured)
 
-- `python -m pytest -q` — **34 tests passed** (number/date normalization, schema shape, ERP reconciliation against `sample_autodraft.json`, refusal to guess, semantic line checks, repair grounding incl. wrong-context and grand-total quotes, **grounded clear/removal operations with exact-match acceptance**, **component resolver** exactness and its tax-inclusive safeguard, **bounded repair loop** convergence (accepted fix + honest rejection), **chunk splitting/merging** for long text-route documents, **key-pool rotation and redaction**, provider error classification, wait-cap behavior on daily quotas).
-- `python main.py --diagnose --input documents` — PDF ingestion inventory for all 42 documents (native text vs scanned pages, OCR status, vision need). No LLM calls.
-- `python main.py --check-config --probe-keys` — per-key health against the live API (metadata calls). Result at run time: one `AIza…` key ready, one `AQ.…` key invalid (dropped automatically), one `AQ.…` key ready; Groq key ready with `openai/gpt-oss-20b` present.
-- **Full runs over all 42 documents** (multiple passes as rules and the solver were refined; free-tier pacing). At the time of writing, every input PDF has exactly one output JSON; `python main.py --validate-output --input documents --output output` reports one output per input with no malformed files.
-- Booking reconciliation of the generated outputs (booked amount through the supplied `erp.py` vs the amount the document states), as observed during development:
-
-  - **Held-out-style set: 5/5 documents book correctly, count and classification 5/5.** (This is the direction of small generalisation gap: performance does not collapse when the document family changes.)
-  - **Open set: 30/30 payable *count* and *classification* correct; 26/30 gross reconciliation.** Remaining weak spots (see below) are flagged `MISMATCH`/`NEEDS_REVIEW` in `logs/`, never silently adjusted.
-- Repair loop observed working end-to-end on live documents: e.g. `INV-14`/`INV-28` (double-placed tax diagnosed from ERP facts, corrected, exact booking), `INV-04`/`INV-07` (credit deduction restored as header discount), `DU-03` (second payable recovered from a 12-page dossier via the chunked text route).
-- Deterministic component resolver observed fixing locale and pack-scaling misreads on live outputs (e.g. a Portuguese quantity `24,000` restored to 24, a price-unit line restored to quantity 1, a utility-bill quantity restored by exact division) without ever touching a tax-inclusive total.
-
-## Open items (honest list)
-
-These are the documents still not booking to the cent in the current `output/`, with the cause:
-
-| File | State | Cause |
+| Check | Command | Result |
 |---|---|---|
-| `INV-06.pdf` | booked 1640.49 vs 1683.98 (ZAR) | tax-inclusive grocery receipt; picking the zero-rated item split that reproduces the printed VAT total needs the strongest vision model; the current pass came from the lite/free-tier route |
-| `INV-21.pdf` | booked 203.07 vs 535.79 (EUR) | Portuguese invoice; needs the strongest vision model to keep the line discount %, the trailing-minus credit row and the header IVA consistent in one pass |
-| `INV-25.pdf` | booked 208.91 vs 176.00 (EUR) | tax-inclusive print-shop invoice; the lite route re-read the inclusive prices as nets in the latest pass |
-| `INV-26.pdf` | no printed gross in the last pass (MYR) | 35-line invoice; the free-tier text route garbled the row table; needs a vision pass |
-| `INV-37.pdf` (not in the visible key set) | booked 2918.09 vs 2487.73 (USD) | utility bill with per-meter/rate tax groups; borderline for the free-tier routes |
-| `HLD-05.pdf` | booked 949.61 vs printed 1012.14; flagged for review | **by design**: embedded IEC excise with no printed per-line split — the system refuses to fabricate the excise and flags instead (see `DESIGN.md` §3) |
+| Test suite | `python -m pytest -q` | **38 passed** |
+| Output coverage | `python main.py --validate-output --input documents --output output` | **42/42 outputs; 0 missing; 0 malformed** |
+| Schema & semantics | same validator | **0 payables with schema or semantic errors** |
+| ERP reconciliation | same validator (booked gross through the sealed `erp.py` vs the amount each document prints) | **0 payables unreconciled — every payable in the set recomputes to the cent** |
+| Ready flag | same validator | **`ready_for_manual_review: true`** |
 
-## Why these remain open, and how to close them
+Quality-actionable warnings were reviewed individually (they are warnings, not errors): genuinely absent invoice numbers on three documents that print none (`DU-03` second payable, `HLD-03`, `HLD-10`, `INV-19`), absent printed currency on `INV-10`/`INV-34` (left blank rather than guessed), the tax-inclusive line semantics of `INV-25` (printed totals are inclusive; unit prices are the documented net decomposition), and two genuinely blank descriptions on the source pages (`INV-26` row 19, `INV-32`). The repair loop, deterministic repairs, and provider routing are all recorded per document in `logs/run.jsonl`.
 
-They are extraction-quality-limited on free-tier model ladders, not mechanism-limited. The strongest Gemini flash bucket (20 requests/day/model on this account) was exhausted during the development passes described above. To close them when the daily buckets reset, run:
+## How the difficult documents were resolved (all verified against the source pages)
+
+- **INV-06** — tax-inclusive grocery receipt with zero-rated items. Resolved by the printed-tax-total rule: header tax at the printed amount (169.83) with net line prices; the printed total is reproduced exactly.
+- **INV-21** — Portuguese invoice with a line discount, a trailing-minus credit row, and a totals-block IVA. Resolved by the discount-once rule plus the deterministic quantity resolver (`24,000` read as 24.00) and exact header tax; books 535.79.
+- **INV-25** — tax-inclusive print shop (“P.VENDA C/IVA”). Net unit prices derived from the printed inclusive amounts; books 176.00.
+- **INV-26** — 35-row Malaysian sales invoice. Two independent high-magnification reads of the page missed the amount of row 30 (printed alongside the “Northwind Consulting SA” section label) and could not foot the table to the printed 873.53. The deterministic **completeness signal** (extracted line sums that reproduce no printed total) flagged the draft, drove a corrective re-read, and the faithful 35-row extraction now sums exactly to the printed total. No number was adjusted to close the gap.
+- **INV-37** — utility reimbursement whose displayed tax roundings (105.60 / 7.02) do not match its own printed net. The deterministic **printed-formula snapper** submits the exact products of the printed rate and the uniquely identifiable bases (105.597025 / 7.015), reproducing the document’s own net 2,487.73 exactly.
+- **HLD-05** — Portuguese Fatura with embedded excise and VAT presented at both levels. The deterministic **duplicate-tax-level resolver** cleared the line-level copies because doing so reproduces the printed gross exactly (835.27 + 176.87 + 25.80 deposit = 1,037.94); nothing was inferred about the excise.
+- **DU-03** — a 12-page shipment dossier yielding two payables (freight invoice 1,040.06 USD; goods invoice 4,499.00 EUR via the chunked text route), with permits/waybills declined.
+
+## Provider verification (live-tested, not assumed)
+
+- **Gemini** — key pool of mixed formats (`AIza…` and `AQ.…`) parsed, health-probed, rotated; daily per-model buckets observed (20/day/model on this account) and rolled automatically; `gemini-3.8-flash` is the strongest reader for dense scans.
+- **Groq** — `qwen/qwen3.8-27b` and `openai/gpt-oss-20b` live; free tier observed at ~8,000 tokens/minute, so long documents are auto-split into page-aware parts and merged; per-model completion caps enforced (qwen 16,384).
+- **OpenRouter** — live; free-model quota verified (`free_model_daily_requests: 50/day`); `nvidia/nemotron-3.5-super-vl:free` reads invoice images, and reasoning is explicitly disabled for extraction turns (reasoning models otherwise burn the token budget and emit empty completions — observed and fixed); upstream-rate-limited models are parked without poisoning the key.
+- **Cloudflare Workers AI** — live; `@cf/meta/llama-4-scout-17b-16e-instruct` accepts image parts (≈0.5 neurons/call); vision capability is gated by a verified model registry so images are never sent to a text-only model.
+- **Budgets** — per-document extraction/repair wall-clock budgets and tighter HTTP read timeouts bound slow free-tier queues (a 40-minute pathological stall was observed and eliminated; per-document worst case is now minutes, not hours).
+
+## Redaction and hygiene
+
+- Every provider error string passes a credential redactor before entering logs; key fingerprints are truncated prefixes only.
+- `Settings.__repr__` redacts all key/token fields, so tracebacks cannot leak credentials.
+- `.env` is git-ignored; the repository tree was scanned for key-like strings (only unmistakably fake test fixtures remain).
+
+## Not verified / honest limits
+
+- No human has yet eyeballed all 42 output records line-by-line against their PDFs; the automated checks, the deterministic gates, and the per-document diagnostics support that review but do not replace it.
+- No claim is made about the employer's hidden/held-back documents or selection outcome.
+- Consumer-grade free tiers (this run) are not suitable for confidential production invoices; see `README.md` §9 for the production path.
+
+## Reproduce
 
 ```powershell
-python main.py --only "INV-06,INV-21,INV-25,INV-26,INV-37"          # auto: strongest available first
-python main.py --validate-output --input documents --output output   # offline check afterwards
+python -m pytest -q
+python main.py --check-config --probe-keys
+python main.py --input documents --output output          # full run through the provider ladders
+python main.py --validate-output --input documents --output output
+python scripts/package_submission.py --allow-quality-warnings   # after reviewing the warnings above
 ```
-
-The repair loop, component resolver and provider ladder will do the rest; anything still unresolved will be flagged rather than faked.
-
-## Not verified here
-
-- No claim that every country/language/tax regime is handled without error beyond the observed results.
-- No manual field-by-field review of all 42 outputs has been recorded; the remaining passes and the review notes live with each run in `logs/run.jsonl`.
-- No claim about the employer's hidden evaluator or selection outcome.
-
-## Required verification on the candidate's machine
-
-1. Configure keys locally; never include `.env` in the submission.
-2. `python main.py --check-config --probe-keys` (one metadata call per key).
-3. `python -m pytest -q`.
-4. `python main.py --only "<remaining files>"` after quota reset; then `python main.py --validate-output ...`.
-5. Manually review every non-`MATCH` block and every `cleared`/`resolved` component in `logs/run.jsonl` against the PDFs.
-6. `python scripts/package_submission.py` only after the above; it refuses placeholders, schema errors and unreconciled payables.

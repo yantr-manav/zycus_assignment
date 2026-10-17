@@ -10,8 +10,8 @@
       "supplier": {
         "name": "Oakhaven Partners LDA",
         "supplier_id": "",
-        "address": "High Street 8 2799-554 LINDA-A-VELHA",
-        "vat_id": "PT059909082"
+        "address": "High Street 8, 2799-554 Linda-a-Velha",
+        "vat_id": "PT 059.909.082"
       },
       "buyer": {
         "company_code": "",
@@ -19,12 +19,12 @@
         "location_code": ""
       },
       "payment_term_id": "Net_30",
-      "po_number": "FTOU368444",
+      "po_number": "",
       "po_id": "",
       "gross_total": "535.79",
-      "subtotal": "868.51",
+      "subtotal": "",
       "total_tax_amount": "100.19",
-      "discount_amount": "432.91",
+      "discount_amount": "",
       "freight_charges": "",
       "insurance_charges": "",
       "extra_charges": "",
@@ -40,7 +40,7 @@
       ],
       "line_items": [
         {
-          "description": "SICAL SUPER BAR Cafe Grao 6x1kg N1PT",
+          "description": "SICAL SUPER BAR Cafe Grao 6xkg N1PT",
           "item_type": "GOODS",
           "uom": "",
           "quantity": "24",
@@ -48,7 +48,7 @@
           "total": "407.95",
           "discount": "",
           "discount_percentage": "51",
-          "tax_rate": "23",
+          "tax_rate": "",
           "tax_amount": "",
           "taxes": []
         },
@@ -61,12 +61,12 @@
           "total": "-8.30",
           "discount": "",
           "discount_percentage": "",
-          "tax_rate": "23",
+          "tax_rate": "",
           "tax_amount": "",
           "taxes": []
         },
         {
-          "description": "Vireo Chocolate Quente 12(25x20g) N1",
+          "description": "Chocolate Quente 12(25x20g) N1",
           "item_type": "GOODS",
           "uom": "",
           "quantity": "1",
@@ -74,12 +74,12 @@
           "total": "10.01",
           "discount": "",
           "discount_percentage": "",
-          "tax_rate": "23",
+          "tax_rate": "",
           "tax_amount": "",
           "taxes": []
         },
         {
-          "description": "NESCAFE Acucar Std 1x2.8kg PT",
+          "description": "NESCAFE Acvear Sid 12.849 PT",
           "item_type": "GOODS",
           "uom": "",
           "quantity": "1",
@@ -87,12 +87,12 @@
           "total": "8.30",
           "discount": "",
           "discount_percentage": "",
-          "tax_rate": "23",
+          "tax_rate": "",
           "tax_amount": "",
           "taxes": []
         },
         {
-          "description": "AHMAD Inf MentaHrtLim 6(20x1,5g)N1PT",
+          "description": "AHMAD Inf MentatiLim 6(20x1.Sq)N1PT",
           "item_type": "GOODS",
           "uom": "",
           "quantity": "3",
@@ -100,12 +100,12 @@
           "total": "8.82",
           "discount": "",
           "discount_percentage": "",
-          "tax_rate": "23",
+          "tax_rate": "",
           "tax_amount": "",
           "taxes": []
         },
         {
-          "description": "AHMAD Inf Camomila 6(20x1.5g)N1PT",
+          "description": "AHMAD Inf Camomia 6(20\u00ab1.5g)N1PT",
           "item_type": "GOODS",
           "uom": "",
           "quantity": "3",
@@ -113,7 +113,7 @@
           "total": "8.82",
           "discount": "",
           "discount_percentage": "",
-          "tax_rate": "23",
+          "tax_rate": "",
           "tax_amount": "",
           "taxes": []
         }

@@ -75,6 +75,33 @@ def test_long_documents_split_by_page_and_merge_payables():
     assert merged["declined_reason"] == ""
 
 
+def test_missing_rows_delta_detects_incomplete_line_sums():
+    from payable_ai.signals import missing_rows_delta
+
+    incomplete = {
+        "gross_total": "873.53", "subtotal": "873.53", "total_tax_amount": "0.00", "taxes": [],
+        "line_items": [{"total": "28.40"}, {"total": "21.90"}],
+    }
+    gap = missing_rows_delta(incomplete)
+    assert gap is not None and gap > 100
+
+    complete = {**incomplete, "line_items": [{"total": "873.53"}]}
+    assert missing_rows_delta(complete) is None
+
+    tax_separate = {
+        "gross_total": "123.00", "subtotal": "", "total_tax_amount": "23.00", "taxes": [],
+        "line_items": [{"total": "100.00"}],
+    }
+    assert missing_rows_delta(tax_separate) is None
+
+    header_tax_separate = {
+        "gross_total": "123.00", "subtotal": "", "total_tax_amount": "",
+        "taxes": [{"tax_rate": "23", "tax_amount": "23.00"}],
+        "line_items": [{"total": "100.00"}],
+    }
+    assert missing_rows_delta(header_tax_separate) is None
+
+
 def test_provider_error_classification_is_conservative():
     from payable_ai.llm import classify_provider_error
 

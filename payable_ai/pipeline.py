@@ -12,8 +12,8 @@ from .llm import LLMRouter
 from .master_data import MasterData
 from .normalization import normalize_payable, normalize_document_type
 from .pdf_io import ensure_full_ocr, read_pdf
-from .signals import build_signals
-from .validation import shape_errors, reconcile, apply_grounded_repairs, resolve_line_components
+from .signals import build_signals, missing_rows_delta
+from .validation import shape_errors, reconcile, apply_grounded_repairs, apply_deterministic_repairs
 from .quality import semantic_issues
 from .evidence import audit_field_evidence
 
@@ -40,10 +40,10 @@ def _abs_difference(validation: dict[str, Any]) -> float | None:
         return None
 
 
-def process_one(path: Path, output_dir: Path, masters: MasterData, router: LLMRouter, settings: Settings) -> dict[str, Any]:
+def process_one(path: Path, output_dir: Path, masters: MasterData, router: LLMRouter, settings: Settings, _review_signal: str = "") -> dict[str, Any]:
     started = datetime.now(timezone.utc).isoformat()
     doc = read_pdf(path, dpi=settings.render_dpi, max_vision_pages=settings.max_vision_pages, ocr_mode=settings.ocr_mode)
-    llm_result = router.extract(doc, path.name)
+    llm_result = router.extract(doc, path.name, review_signal=_review_signal)
     # Local OCR is free; completing it here gives the evidence audit and the
     # repair-grounding checks real text to verify against, on the vision route too.
     try:
@@ -69,9 +69,10 @@ def process_one(path: Path, output_dir: Path, masters: MasterData, router: LLMRo
             # No derived totals. Leave it empty; this diagnostic helps identify unresolved cases.
             pass
         payable, norm_diag = normalize_payable(raw_payable, masters)
-        # Determinism boundary: quantities uniquely pinned by printed row
-        # arithmetic are restored before any judgment work begins.
-        payable, component_repairs = resolve_line_components(payable)
+        # Determinism boundary: math-certain repairs (quantities pinned by printed
+        # row arithmetic, duplicated tax levels, printed-formula tax amounts) are
+        # restored before any judgment work begins. Each is exact-match gated.
+        payable, component_repairs = apply_deterministic_repairs(payable)
         initial_errors = shape_errors(payable)
         initial_quality = semantic_issues(payable)
         validation = reconcile(payable)
@@ -119,7 +120,7 @@ def process_one(path: Path, output_dir: Path, masters: MasterData, router: LLMRo
                         })
                         break
                     candidate_payable, candidate_diag = normalize_payable(candidate_raw, masters)
-                    candidate_payable, candidate_components = resolve_line_components(candidate_payable)
+                    candidate_payable, candidate_components = apply_deterministic_repairs(candidate_payable)
                     candidate_validation = reconcile(candidate_payable)
                     candidate_errors = shape_errors(candidate_payable)
                     candidate_quality = semantic_issues(candidate_payable)
@@ -221,6 +222,55 @@ def process_one(path: Path, output_dir: Path, masters: MasterData, router: LLMRo
         if nonpayable_note and len(raw_payables) > 0 and extracted.get("contains_non_payable_section") is True:
             declined = _decline(str(extracted.get("non_payable_type", "OTHER")), nonpayable_note)
 
+    # ── Deterministic completeness check ──────────────────────────────────────
+    # When the extracted line amounts reproduce none of the printed totals, rows
+    # were dropped or mis-transcribed. That is a transcription deficiency, not a
+    # component-misplacement one, so the remedy is one corrective re-read of the
+    # same document carrying the verified gap as a signal. The retry is kept
+    # only when it reconciles at least as well as the first attempt.
+    def _attempt_score(rows: list[dict[str, Any]]) -> tuple[int, float]:
+        matches = sum(1 for row in rows if row.get("validation", {}).get("status") == "MATCH")
+        gaps = sum(float(row.get("completeness_gap") or 0.0) for row in rows)
+        return (matches, -round(gaps, 2))
+
+    completeness_gaps: list[dict[str, Any]] = []
+    completeness_note = ""
+    for index, payable in enumerate(final_payables):
+        gap = missing_rows_delta(payable)
+        if gap is not None and reconcile(payable).get("status") == "MISMATCH":
+            completeness_gaps.append({"index": index, "invoice_number": payable.get("invoice_number", ""), "gap": gap})
+            if index < len(payable_diagnostics):
+                payable_diagnostics[index]["completeness_gap"] = gap
+
+    if completeness_gaps and not _review_signal:
+        notes = [
+            f"- The draft for payable #{g['index']}"
+            + (f" (invoice {g['invoice_number']!r})" if g["invoice_number"] else "")
+            + f" has line amounts that match none of the document's printed totals; the closest printed total is off by "
+              f"{g['gap']:.2f}. Rows are missing or mis-transcribed. Re-read the item table row by row — including rows "
+              "directly under section headings, continuation lines, and rows after subtotal separators — and return the "
+              "complete payable list. Verify that the sum of your line amounts reproduces a printed total."
+            for g in completeness_gaps
+        ]
+        retry_signal = ("The line-sum check found incomplete extraction:\n" + "\n".join(notes))
+        try:
+            retry_diagnostics = process_one(path, output_dir, masters, router, settings, _review_signal=retry_signal)
+            retry_rows = retry_diagnostics.get("payables", [])
+            if _attempt_score(retry_rows) > _attempt_score(payable_diagnostics):
+                retry_diagnostics["completeness_reextract"] = "used (better reconciliation than first attempt)"
+                return retry_diagnostics
+            # Retry did not improve: restore this attempt's output (the retry wrote its own).
+            _write_json(output_dir / f"{path.stem}.json", _outer_result(path.name, final_payables, declined))
+            completeness_note = "attempted (kept the better attempt)"
+            for row in payable_diagnostics:
+                row.pop("completeness_gap", None)
+            for g in completeness_gaps:
+                if g["index"] < len(payable_diagnostics):
+                    payable_diagnostics[g["index"]]["completeness_gap"] = g["gap"]
+        except Exception as exc:
+            doc.warnings.append(f"completeness re-extraction failed: {type(exc).__name__}: {exc}")
+            _write_json(output_dir / f"{path.stem}.json", _outer_result(path.name, final_payables, declined))
+
     result = _outer_result(path.name, final_payables, declined)
     output_path = output_dir / f"{path.stem}.json"
     _write_json(output_path, result)
@@ -249,6 +299,8 @@ def process_one(path: Path, output_dir: Path, masters: MasterData, router: LLMRo
         "payables": payable_diagnostics,
         "output_path": str(output_path),
     }
+    if completeness_note:
+        diagnostics["completeness_reextract"] = completeness_note
     return diagnostics
 
 

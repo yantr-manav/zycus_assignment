@@ -1,14 +1,41 @@
 from __future__ import annotations
+import base64
 import json
 import re
 import time
 from dataclasses import dataclass, field
 from typing import Any
 
+import httpx
+
 from .config import Settings
 from .keys import KeyPool, Pacer, key_label, redact
 from .pdf_io import PDFDocument, split_document_text, trim_document_text, ensure_full_ocr
 from .prompting import SYSTEM_PROMPT, EXTRACTION_REFERENCE, extraction_prompt, repair_prompt
+
+OPENROUTER_CHAT_URL = "https://openrouter.ai/api/v1/chat/completions"
+OPENROUTER_MODELS_URL = "https://openrouter.ai/api/v1/models"
+OPENROUTER_KEY_URL = "https://openrouter.ai/api/v1/key"
+
+# Workers AI vision models that accept image parts on the OpenAI-compatible route.
+# Everything else is treated as text-only: images are never sent to a model we
+# cannot confirm accepts them (a text-only model would either error or ignore
+# the image silently, and silently ignoring is the worse failure mode).
+_CF_VISION_MODELS = {
+    "@cf/meta/llama-3.2-11b-vision-instruct",
+    "@cf/meta/llama-4-scout-17b-16e-instruct",
+    "@cf/google/gemma-4-26b-a4b-it",
+    "@cf/google/gemma-4-31b-it",
+}
+
+
+class ProviderHTTPError(Exception):
+    """HTTP failure from an OpenAI-compatible provider, carrying its status."""
+
+    def __init__(self, status_code: int, message: str):
+        super().__init__(f"{status_code}: {message}")
+        self.status_code = status_code
+        self.message = message
 
 
 def _norm_invoice_number(value: Any) -> str:
@@ -179,6 +206,10 @@ def classify_provider_error(exc: Exception) -> tuple[str, float | None]:
         return KeyPool.INVALID, retry_after
     if status == 413 or "request too large" in message or "request is too large" in message or "max_completion_tokens" in message:
         return KeyPool.REQUEST, retry_after
+    if status == 422 or "empty completion" in message:
+        # Reasoning-style models can consume the whole budget before emitting any
+        # JSON; the key is healthy, the request simply does not fit this model.
+        return KeyPool.REQUEST, retry_after
     if status == 429 or "rate limit" in message or "rate_limit" in message or "quota" in message or "resource exhausted" in message or "resource_exhausted" in message:
         return KeyPool.QUOTA, retry_after
     return KeyPool.TRANSIENT, retry_after
@@ -188,7 +219,7 @@ def _is_daily_exhaustion(message: str, retry_after: float | None) -> bool:
     if retry_after is not None and retry_after > 1800:
         return True
     lowered = message.lower()
-    return "per day" in lowered or "perday" in lowered
+    return any(token in lowered for token in ("per day", "per-day", "perday", "daily", "free-models-per"))
 
 
 class LLMRouter:
@@ -196,11 +227,19 @@ class LLMRouter:
         self.settings = settings
         self.gemini = KeyPool("gemini", list(settings.gemini_api_keys))
         self.groq = KeyPool("groq", list(settings.groq_api_keys))
+        self.openrouter = KeyPool("openrouter", list(settings.openrouter_api_keys))
+        cloudflare_token = settings.cloudflare_api_token if settings.cloudflare_account_id else ""
+        self.cloudflare = KeyPool("cloudflare", [cloudflare_token] if cloudflare_token else [])
         self._pacer = Pacer(settings.min_call_interval_seconds)
         self._gemini_clients: dict[str, Any] = {}
         self._groq_clients: dict[str, Any] = {}
+        self._http = httpx.Client(timeout=httpx.Timeout(180.0, connect=20.0, read=150.0))
+        self._openrouter_vision_support: dict[str, bool] = {}
         # (provider, model) pairs with no remaining quota today or unavailable.
         self._dead_models: set[tuple[str, str]] = set()
+        # (provider, model) -> monotonic time until which the model is skipped
+        # (e.g. an OpenRouter upstream model that is temporarily saturated).
+        self._model_cooldown: dict[tuple[str, str], float] = {}
         # Backwards-compatible handles for tools/tests that introspect the router.
         self._gemini = bool(self.gemini)
         self._groq = bool(self.groq)
@@ -224,20 +263,34 @@ class LLMRouter:
         return self._groq_clients[key]
 
     def _pool(self, provider: str) -> KeyPool:
-        return self.gemini if provider == "gemini" else self.groq
+        return {
+            "gemini": self.gemini,
+            "groq": self.groq,
+            "openrouter": self.openrouter,
+            "cloudflare": self.cloudflare,
+        }[provider]
 
     def _candidates(self, provider: str) -> list[str]:
-        if provider == "gemini":
-            models = [self.settings.gemini_model, *self.settings.gemini_fallback_models]
-        else:
-            models = [self.settings.groq_model, *self.settings.groq_fallback_models]
+        catalog = {
+            "gemini": [self.settings.gemini_model, *self.settings.gemini_fallback_models],
+            "groq": [self.settings.groq_model, *self.settings.groq_fallback_models],
+            "openrouter": [self.settings.openrouter_model, *self.settings.openrouter_fallback_models],
+            "cloudflare": [self.settings.cloudflare_model, *self.settings.cloudflare_fallback_models],
+        }
         seen: set[str] = set()
         out: list[str] = []
-        for model in models:
-            if model and model not in seen and (provider, model) not in self._dead_models:
-                seen.add(model)
-                out.append(model)
+        now = time.monotonic()
+        for model in catalog.get(provider, []):
+            if not model or model in seen or (provider, model) in self._dead_models:
+                continue
+            if self._model_cooldown.get((provider, model), 0.0) > now:
+                continue
+            seen.add(model)
+            out.append(model)
         return out
+
+    def _cool_model(self, provider: str, model: str, seconds: float = 300.0) -> None:
+        self._model_cooldown[(provider, model)] = time.monotonic() + seconds
 
     def _provider_ready(self, provider: str) -> bool:
         pool = self._pool(provider)
@@ -245,41 +298,87 @@ class LLMRouter:
 
     def available(self) -> list[str]:
         out = []
-        if self.gemini:
-            out.append("gemini")
-        if self.groq:
-            out.append("groq")
+        for provider in ("gemini", "groq", "openrouter", "cloudflare"):
+            if self._pool(provider):
+                out.append(provider)
         return out
 
     def ensure_available(self) -> None:
-        if self.settings.provider == "gemini" and not self.gemini:
-            raise RuntimeError("Gemini selected but no GEMINI_API_KEY configured. Check .env and pip install -r requirements.txt")
-        if self.settings.provider == "groq" and not self.groq:
-            raise RuntimeError("Groq selected but no GROQ_API_KEY configured. Check .env and pip install -r requirements.txt")
+        configured = self.settings.provider
+        if configured != "auto" and not self._pool(configured):
+            env_hint = {
+                "gemini": "GEMINI_API_KEY",
+                "groq": "GROQ_API_KEY",
+                "openrouter": "OPENROUTER_API_KEY",
+                "cloudflare": "CLOUDFLARE_API_TOKEN + CLOUDFLARE_ACCOUNT_ID",
+            }[configured]
+            raise RuntimeError(f"{configured} selected but not configured ({env_hint}). Check .env")
         if not self.available():
-            raise RuntimeError("No LLM provider configured. Add GEMINI_API_KEY and/or GROQ_API_KEY to .env")
+            raise RuntimeError(
+                "No LLM provider configured. Add GEMINI_API_KEY, GROQ_API_KEY, OPENROUTER_API_KEY "
+                "and/or CLOUDFLARE_ACCOUNT_ID+CLOUDFLARE_API_TOKEN to .env"
+            )
 
     def _order(self, doc: PDFDocument) -> list[str]:
-        configured = self.settings.provider
         available = self.available()
-        if configured in {"gemini", "groq"}:
-            first = configured
-        elif doc.needs_vision and self.gemini:
-            first = "gemini"
-        elif self.groq:
-            first = "groq"
+        configured = self.settings.provider
+        if configured != "auto":
+            preferred = [configured]
         else:
-            first = "gemini"
-        order = [first] + [p for p in ("gemini", "groq") if p != first and p in available]
-        return [p for p in order if p in available]
+            preferred = list(self.settings.ladder_vision if doc.needs_vision else self.settings.ladder_text)
+        merged = list(dict.fromkeys(preferred + list(self.settings.ladder_vision) + list(self.settings.ladder_text)))
+        return [p for p in merged if p in available]
 
     def key_status(self) -> dict[str, Any]:
         """Per-key health for diagnostics; key values are never exposed."""
         return {
             "gemini": self.gemini.status(),
             "groq": self.groq.status(),
+            "openrouter": self.openrouter.status(),
+            "cloudflare": self.cloudflare.status(),
             "dead_models": sorted(f"{provider}:{model}" for provider, model in self._dead_models),
         }
+
+    # ------------------------------------------------------- vision capability
+
+    def _openrouter_model_catalog(self) -> dict[str, dict[str, Any]]:
+        """Fetch OpenRouter's model catalog once to learn per-model capabilities."""
+        cached = getattr(self, "_openrouter_catalog_cache", None)
+        if cached is not None:
+            return cached
+        catalog: dict[str, dict[str, Any]] = {}
+        try:
+            response = self._http.get(OPENROUTER_MODELS_URL, timeout=30)
+            if response.status_code == 200:
+                for row in response.json().get("data", []):
+                    catalog[row.get("id", "")] = row
+        except Exception:
+            catalog = {}
+        self._openrouter_catalog_cache = catalog
+        return catalog
+
+    def _supports_vision(self, provider: str, model: str) -> bool:
+        if provider == "gemini":
+            return True  # gemini flash tiers are multimodal
+        if provider == "groq":
+            return False  # no vision models on this account's catalog
+        if provider == "cloudflare":
+            return model in _CF_VISION_MODELS
+        if provider == "openrouter":
+            if model in self._openrouter_vision_support:
+                return self._openrouter_vision_support[model]
+            catalog = self._openrouter_model_catalog()
+            row = catalog.get(model)
+            if row is not None:
+                modalities = (row.get("architecture") or {}).get("input_modalities", [])
+                supported = "image" in modalities
+            else:
+                # Catalog unavailable: fall back to a conservative name heuristic.
+                lowered = model.casefold()
+                supported = any(token in lowered for token in ("vision", "-vl", "gemma-4", "scout", "dots", "omni"))
+            self._openrouter_vision_support[model] = supported
+            return supported
+        return False
 
     def probe_keys(self) -> dict[str, Any]:
         """Check each configured key against its provider with a metadata call.
@@ -287,7 +386,7 @@ class LLMRouter:
         One request per key, no tokens. Reports whether the primary model (or a
         configured fallback) is usable for that key.
         """
-        report: dict[str, Any] = {"gemini": [], "groq": []}
+        report: dict[str, Any] = {"gemini": [], "groq": [], "openrouter": [], "cloudflare": []}
         if self.gemini:
             from google.genai import errors as genai_errors
             for key in self.gemini.keys():
@@ -328,6 +427,49 @@ class LLMRouter:
                     else:
                         row["state"] = f"error:{_error_status(exc) or type(exc).__name__}"
                 report["groq"].append(row)
+        if self.openrouter:
+            for key in self.openrouter.keys():
+                row = {"key": key_label(key), "state": "ready", "model": None, "vision": None}
+                try:
+                    response = self._http.get(OPENROUTER_KEY_URL, headers=self._openrouter_headers(key), timeout=30)
+                    if response.status_code in (401, 403):
+                        row["state"] = "invalid"
+                        self.openrouter.note_failure(key, KeyPool.INVALID)
+                    elif response.status_code == 200:
+                        row["model"] = self.settings.openrouter_model
+                        row["vision"] = self._supports_vision("openrouter", self.settings.openrouter_model)
+                        self.openrouter.note_success(key)
+                    else:
+                        row["state"] = f"error:{response.status_code}"
+                except Exception as exc:
+                    row["state"] = f"unreachable:{type(exc).__name__}"
+                report["openrouter"].append(row)
+        if self.cloudflare:
+            for key in self.cloudflare.keys():
+                row = {"key": key_label(key), "state": "ready", "model": None, "vision": None}
+                try:
+                    response = self._http.get(
+                        f"https://api.cloudflare.com/client/v4/accounts/{self.settings.cloudflare_account_id}/ai/models/search",
+                        headers={"Authorization": f"Bearer {key}"},
+                        params={"per_page": 100, "task": "Text Generation"},
+                        timeout=30,
+                    )
+                    if response.status_code in (401, 403):
+                        row["state"] = "invalid"
+                        self.cloudflare.note_failure(key, KeyPool.INVALID)
+                    elif response.status_code == 200:
+                        names = [m.get("name", "") for m in (response.json().get("result") or [])]
+                        if self.settings.cloudflare_model in names:
+                            row["model"] = self.settings.cloudflare_model
+                            row["vision"] = self._supports_vision("cloudflare", self.settings.cloudflare_model)
+                        else:
+                            row["state"] = "model-unavailable"
+                        self.cloudflare.note_success(key)
+                    else:
+                        row["state"] = f"error:{response.status_code}"
+                except Exception as exc:
+                    row["state"] = f"unreachable:{type(exc).__name__}"
+                report["cloudflare"].append(row)
         return report
 
     def _probe_fallback_models(self, key: str, row: dict[str, Any]) -> str | None:
@@ -345,16 +487,20 @@ class LLMRouter:
 
     # -------------------------------------------------------------- extraction
 
-    def extract(self, doc: PDFDocument, filename: str) -> LLMResult:
+    def extract(self, doc: PDFDocument, filename: str, review_signal: str = "") -> LLMResult:
         self.ensure_available()
         attempts: list[str] = []
         errors: list[str] = []
         order = self._order(doc)
+        deadline = time.monotonic() + self.settings.extract_budget_seconds
         for index, provider in enumerate(order):
             # If this provider is cooling down and a later one exists, skip it
             # fast instead of sleeping through the cooldown mid-batch.
             if not self._provider_ready(provider) and index < len(order) - 1:
                 attempts.append(f"{provider}:cooling-down-skipped")
+                continue
+            if index > 0 and time.monotonic() > deadline:
+                attempts.append(f"{provider}:skipped (extract time budget spent)")
                 continue
             try:
                 if provider == "groq":
@@ -368,7 +514,7 @@ class LLMRouter:
                         state = None
                         for index, part_text in enumerate(parts, start=1):
                             prompt = (
-                                extraction_prompt(part_text, filename)
+                                extraction_prompt(part_text, filename, review_signal=review_signal)
                                 + f"\n\nNOTE: this is PART {index} of {len(parts)} of the document; extract only facts visible "
                                   "in the pages shown here. A payable may continue in another part — return what these pages evidence."
                             )
@@ -378,10 +524,21 @@ class LLMRouter:
                         data = merge_extraction_parts(part_results)
                         attempts.append(f"{provider}:success({len(parts)} parts)")
                         return LLMResult(data, provider, model, attempts, conversation=None)
+                if provider in {"openrouter", "cloudflare"} and doc.needs_vision:
+                    # Vision-capable models receive images; text-only candidates in
+                    # this provider's ladder need OCR text, so complete it locally
+                    # before the call without failing the route when OCR is missing.
+                    try:
+                        ensure_full_ocr(doc)
+                    except Exception as exc:
+                        doc.warnings.append(f"on-demand OCR before {provider} failed: {type(exc).__name__}: {exc}")
                 limit = self.settings.groq_max_document_chars if provider == "groq" else self.settings.max_document_chars
                 text = trim_document_text(doc.text, limit)
-                prompt = extraction_prompt(text, filename)
-                data, model, state = self._call(provider, prompt, doc=doc, include_images=(provider == "gemini" and doc.needs_vision))
+                prompt = extraction_prompt(text, filename, review_signal=review_signal)
+                data, model, state = self._call(
+                    provider, prompt, doc=doc,
+                    include_images=(doc.needs_vision and provider in {"gemini", "openrouter", "cloudflare"}),
+                )
                 self._check_extraction(data)
                 attempts.append(f"{provider}:success")
                 return LLMResult(data, provider, model, attempts, conversation=state)
@@ -437,14 +594,28 @@ class LLMRouter:
                 "A partial transcript is not reliable evidence for changing accounting fields."
             )
 
-        warm = state is not None and state.provider == preferred_provider and bool(state.transcript)
-        order = [preferred_provider] + [p for p in ("gemini", "groq") if p != preferred_provider and p in self.available()]
+        # Warm conversation turns (which keep page images in context) are efficient
+        # on Gemini's SDK; on the stateless OpenAI-compatible routes every turn
+        # re-uploads the payload, so repairs there run text-only over the OCR/native
+        # transcript — the same text the grounding gate verifies quotes against.
+        warm = (
+            state is not None
+            and state.provider == preferred_provider
+            and bool(state.transcript)
+            and preferred_provider in {"gemini", "groq"}
+        )
+        merged = list(dict.fromkeys(
+            [preferred_provider] + list(self.settings.ladder_vision) + list(self.settings.ladder_text)
+        ))
+        order = [p for p in merged if p in self.available()]
         errors: list[str] = []
+        deadline = time.monotonic() + self.settings.repair_budget_seconds
         for index, provider in enumerate(order):
-            if provider not in self.available():
-                continue
             if not self._provider_ready(provider) and index < len(order) - 1:
                 errors.append(f"{provider}:cooling-down-skipped")
+                continue
+            if index > 0 and time.monotonic() > deadline:
+                errors.append(f"{provider}:skipped (repair time budget spent)")
                 continue
             try:
                 if warm and provider == preferred_provider and state is not None:
@@ -454,7 +625,10 @@ class LLMRouter:
                     limit = self.settings.groq_max_document_chars if provider == "groq" else min(self.settings.max_document_chars, 70000)
                     text = trim_document_text(doc.text, limit)
                     prompt = repair_prompt(filename, payable, booked, printed_gross, signals=signals, document_text=text)
-                    data, model, new_state = self._call(provider, prompt, doc=doc, include_images=(provider == "gemini" and doc.needs_vision))
+                    data, model, new_state = self._call(
+                        provider, prompt, doc=doc,
+                        include_images=(doc.needs_vision and provider == "gemini"),
+                    )
                 if not isinstance(data.get("changes", []), list):
                     raise ValueError("Repair response 'changes' must be an array")
                 return LLMResult(data, provider, model, [f"{provider}:repair_success"], conversation=new_state)
@@ -470,6 +644,10 @@ class LLMRouter:
             return self._call_gemini(prompt, doc, include_images)
         if provider == "groq":
             return self._call_groq(prompt)
+        if provider == "openrouter":
+            return self._call_openrouter(prompt, doc, include_images)
+        if provider == "cloudflare":
+            return self._call_cloudflare(prompt, doc, include_images)
         raise ValueError(f"Unknown provider: {provider}")
 
     def _call_warm(self, provider: str, prompt: str, state: ConversationState) -> tuple[dict[str, Any], str, ConversationState]:
@@ -477,10 +655,13 @@ class LLMRouter:
             return self._call_gemini(prompt, None, False, state=state)
         if provider == "groq":
             return self._call_groq(prompt, state=state)
+        if provider == "openrouter":
+            return self._call_openrouter(prompt, None, False, state=state)
+        if provider == "cloudflare":
+            return self._call_cloudflare(prompt, None, False, state=state)
         raise ValueError(f"Unknown provider: {provider}")
 
-    def _gemini_image_parts(self, doc: PDFDocument) -> list[Any]:
-        from google.genai import types
+    def _select_vision_pages(self, doc: PDFDocument) -> list[Any]:
         images = [p for p in doc.pages if p.image_jpeg]
         cap = self.settings.max_vision_pages
         if len(images) > cap:
@@ -511,10 +692,25 @@ class LLMRouter:
                     if len(chosen) >= cap:
                         break
             images = [chosen[k] for k in sorted(chosen)][:cap]
+        return images
+
+    def _gemini_image_parts(self, doc: PDFDocument) -> list[Any]:
+        from google.genai import types
         parts: list[Any] = []
-        for page in images:
+        for page in self._select_vision_pages(doc):
             parts.append(types.Part.from_text(text=f"[RENDERED SOURCE PAGE {page.page_number}]"))
             parts.append(types.Part.from_bytes(data=page.image_jpeg, mime_type="image/jpeg"))
+        return parts
+
+    def _openai_image_parts(self, doc: PDFDocument) -> list[dict[str, Any]]:
+        parts: list[dict[str, Any]] = []
+        for page in self._select_vision_pages(doc):
+            parts.append({"type": "text", "text": f"[RENDERED SOURCE PAGE {page.page_number}]"})
+            encoded = base64.b64encode(page.image_jpeg or b"").decode("ascii")
+            parts.append({
+                "type": "image_url",
+                "image_url": {"url": f"data:image/jpeg;base64,{encoded}"},
+            })
         return parts
 
     def _handle_common_error(
@@ -544,6 +740,12 @@ class LLMRouter:
             if _is_daily_exhaustion(str(exc), retry_after):
                 self._dead_models.add((provider, candidate))
                 errors.append(redact(f"{label}:daily quota exhausted on {candidate}"))
+                return "next-candidate"
+            if provider == "openrouter" and "rate-limited upstream" in str(exc).casefold():
+                # The key is healthy; this upstream model is saturated. Park the
+                # model briefly and try the next candidate without burning key state.
+                self._cool_model(provider, candidate, 300.0)
+                errors.append(redact(f"{label}:upstream rate-limit on {candidate}"))
                 return "next-candidate"
             if key:
                 pool.note_failure(key, KeyPool.QUOTA, retry_after)
@@ -692,6 +894,183 @@ class LLMRouter:
                         continue
                     break  # next key (or raise already propagated)
         raise RuntimeError("Groq attempts exhausted: " + " | ".join(errors))
+
+    # ------------------------------------------------- OpenAI-compatible routes
+
+    def _openrouter_headers(self, key: str) -> dict[str, str]:
+        return {
+            "Authorization": f"Bearer {key}",
+            "Content-Type": "application/json",
+            "HTTP-Referer": "https://github.com/zycus-bookable-payable",
+            "X-Title": "Bookable Payable AI",
+        }
+
+    def _cloudflare_headers(self, key: str) -> dict[str, str]:
+        return {"Authorization": f"Bearer {key}", "Content-Type": "application/json"}
+
+    def _openai_compat_post(
+        self,
+        url: str,
+        headers: dict[str, str],
+        body: dict[str, Any],
+        use_json_mode: bool,
+    ) -> str:
+        """POST an OpenAI-compatible chat request; return the raw content string.
+
+        Models differ in JSON-mode support, so a rejected ``response_format`` is
+        retried once without it (the prompt already demands JSON and the parser
+        tolerates fences); any other HTTP failure surfaces as ``ProviderHTTPError``.
+        """
+        payload = dict(body)
+        if use_json_mode:
+            payload["response_format"] = {"type": "json_object"}
+        response = self._http.post(url, headers=headers, json=payload)
+        if response.status_code >= 400 and use_json_mode:
+            text = response.text[:600]
+            if "response_format" in text or ("json" in text.casefold() and response.status_code == 400):
+                payload.pop("response_format", None)
+                response = self._http.post(url, headers=headers, json=payload)
+        if response.status_code >= 400:
+            raise ProviderHTTPError(response.status_code, response.text[:400])
+        try:
+            payload_json = response.json()
+        except Exception:
+            raise ProviderHTTPError(response.status_code, "response was not JSON")
+        choices = payload_json.get("choices") or []
+        content = ""
+        if choices:
+            message = choices[0].get("message") or {}
+            content = message.get("content") or ""
+            if isinstance(content, list):  # some gateways return content parts
+                content = "".join(part.get("text", "") for part in content if isinstance(part, dict))
+        if not content and choices:
+            content = choices[0].get("text") or ""
+        if not content:
+            finish = choices[0].get("finish_reason", "") if choices else ""
+            raise ProviderHTTPError(422, f"empty completion (finish_reason={finish!r})")
+        return content
+
+    def _compat_user_content(self, text: str, doc: PDFDocument | None, include_images: bool, model: str, provider: str) -> Any:
+        if include_images and doc is not None and self._supports_vision(provider, model):
+            return [{"type": "text", "text": text}] + self._openai_image_parts(doc)
+        return text
+
+    def _call_openrouter(
+        self,
+        prompt: str,
+        doc: PDFDocument | None,
+        include_images: bool,
+        state: ConversationState | None = None,
+    ) -> tuple[dict[str, Any], str, ConversationState]:
+        return self._call_openai_compatible(
+            provider="openrouter",
+            prompt=prompt,
+            doc=doc,
+            include_images=include_images,
+            state=state,
+            url=OPENROUTER_CHAT_URL,
+            headers_fn=self._openrouter_headers,
+            max_tokens=min(self.settings.max_output_tokens, 32768),
+        )
+
+    def _call_cloudflare(
+        self,
+        prompt: str,
+        doc: PDFDocument | None,
+        include_images: bool,
+        state: ConversationState | None = None,
+    ) -> tuple[dict[str, Any], str, ConversationState]:
+        url = (
+            f"https://api.cloudflare.com/client/v4/accounts/{self.settings.cloudflare_account_id}"
+            "/ai/v1/chat/completions"
+        )
+        return self._call_openai_compatible(
+            provider="cloudflare",
+            prompt=prompt,
+            doc=doc,
+            include_images=include_images,
+            state=state,
+            url=url,
+            headers_fn=self._cloudflare_headers,
+            max_tokens=min(self.settings.max_output_tokens, 16384),
+        )
+
+    def _call_openai_compatible(
+        self,
+        provider: str,
+        prompt: str,
+        doc: PDFDocument | None,
+        include_images: bool,
+        state: ConversationState | None,
+        url: str,
+        headers_fn,
+        max_tokens: int,
+    ) -> tuple[dict[str, Any], str, ConversationState]:
+        pool = self._pool(provider)
+        warm_state: ConversationState | None = None
+        if state is not None:
+            warm_state = ConversationState(
+                provider=state.provider,
+                model=state.model,
+                transcript=list(state.transcript),
+                last_model_text=state.last_model_text,
+                used_vision=state.used_vision,
+            )
+            warm_state.transcript.append({"role": "user", "content": prompt})
+
+        errors: list[str] = []
+        for _ in range(max(2, pool.size * 2)):
+            candidates = self._candidates(provider)
+            if not candidates:
+                raise RuntimeError(f"no {provider} model with remaining quota: " + " | ".join(errors))
+            key = pool.next_key()
+            if key is None:
+                raise RuntimeError(f"no {provider} key currently available: " + " | ".join(errors))
+            for candidate in candidates:
+                try:
+                    if warm_state is not None:
+                        turn_messages = list(warm_state.transcript)
+                        turn_state = warm_state
+                    else:
+                        content = self._compat_user_content(
+                            EXTRACTION_REFERENCE + "\n\n" + prompt, doc, include_images, candidate, provider
+                        )
+                        turn_messages = [
+                            {"role": "system", "content": SYSTEM_PROMPT + " Return one valid JSON object only."},
+                            {"role": "user", "content": content},
+                        ]
+                        turn_state = ConversationState(
+                            provider=provider,
+                            model=candidate,
+                            transcript=turn_messages,
+                            used_vision=isinstance(content, list),
+                        )
+                    self._pacer.wait()
+                    body: dict[str, Any] = {
+                        "model": candidate,
+                        "messages": turn_messages,
+                        "temperature": 0.1,
+                        "max_tokens": max_tokens,
+                    }
+                    if provider == "openrouter":
+                        # These are extraction turns, not puzzle-solving turns: the
+                        # JSON answer is wanted, not a chain of thought. Reasoning
+                        # models otherwise burn whole token budgets on analysis and
+                        # emit nothing (observed as empty completions).
+                        body["reasoning"] = {"enabled": False}
+                    raw = self._openai_compat_post(url, headers_fn(key), body, use_json_mode=True)
+                    data = _extract_json(raw)
+                    pool.note_success(key)
+                    turn_state.model = candidate
+                    turn_state.last_model_text = raw
+                    turn_state.transcript = turn_messages + [{"role": "assistant", "content": raw}]
+                    return data, candidate, turn_state
+                except Exception as exc:
+                    action = self._handle_common_error(provider, candidate, exc, key, errors)
+                    if action == "next-candidate":
+                        continue
+                    break  # next key
+        raise RuntimeError(f"{provider} attempts exhausted: " + " | ".join(errors))
 
     # --------------------------------------------------------------- validation
 

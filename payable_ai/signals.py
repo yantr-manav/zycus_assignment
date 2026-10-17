@@ -16,6 +16,19 @@ from typing import Any
 
 from erp import erp_book, num, round2
 
+from .normalization import normalize_decimal
+
+
+def _decimal(value: Any) -> Decimal | None:
+    """Parse a payable number string into a Decimal (or None)."""
+    normalized = normalize_decimal(value)
+    if not normalized:
+        return None
+    try:
+        return Decimal(normalized)
+    except (ArithmeticError, ValueError):
+        return None
+
 
 def _line_base(li: dict[str, Any]) -> float:
     qty = num(li.get("quantity"))
@@ -136,6 +149,62 @@ def erp_trace(payable: dict[str, Any]) -> dict[str, Any] | None:
         }
     except Exception:
         return None
+
+
+def missing_rows_delta(payable: dict[str, Any]) -> float | None:
+    """Gap between the extracted line sums and every printed total candidate.
+
+    Returns the gap (a positive float) when the extracted ``total`` column
+    matches NONE of the document's printed totals — the printed subtotal, the
+    printed gross, the gross minus the declared tax, or the gross minus the
+    supplied header tax amounts. A draft that matches none of them has lost or
+    mis-transcribed rows; the caller drives one corrective re-read. Returns
+    None when any printed total is reproduced (or when nothing printed exists
+    to compare against), so complete drafts are never re-extracted.
+    """
+    from decimal import Decimal
+
+    lines = payable.get("line_items") if isinstance(payable.get("line_items"), list) else []
+    if not lines:
+        return None
+    line_sum = Decimal("0")
+    for line in lines:
+        if not isinstance(line, dict):
+            continue
+        value = _decimal(line.get("total"))
+        if value is not None:
+            line_sum += value
+    if line_sum == 0:
+        return None
+
+    candidates: list[Decimal] = []
+    declared = _decimal(payable.get("subtotal"))
+    if declared is not None:
+        candidates.append(declared)
+    gross = _decimal(payable.get("gross_total"))
+    if gross is not None:
+        candidates.append(gross)
+        declared_tax = _decimal(payable.get("total_tax_amount"))
+        if declared_tax is not None:
+            candidates.append(gross - declared_tax)
+        header_amounts = Decimal("0")
+        header_known = True
+        for tax in payable.get("taxes") or []:
+            if not isinstance(tax, dict):
+                continue
+            amount = _decimal(tax.get("tax_amount"))
+            if amount is None:
+                header_known = False
+                break
+            header_amounts += amount
+        if header_known and header_amounts != 0:
+            candidates.append(gross - header_amounts)
+    if not candidates:
+        return None
+    if any(abs(line_sum - candidate) <= Decimal("0.05") for candidate in candidates):
+        return None
+    gap = min((abs(line_sum - candidate) for candidate in candidates))
+    return float(gap)
 
 
 def build_signals(

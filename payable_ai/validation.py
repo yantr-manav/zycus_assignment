@@ -2,11 +2,26 @@ from __future__ import annotations
 import copy
 import json
 import re
+from decimal import Decimal
 from typing import Any
 from rapidfuzz import fuzz
 from erp import erp_book
 from .master_data import norm_text
 from .normalization import normalize_decimal
+
+
+def _format_amount(value: Decimal | float) -> str:
+    """Dot-decimal money/amount text: >=2 decimals, no trailing-zero noise."""
+    number = value if isinstance(value, Decimal) else Decimal(str(value))
+    text = format(number, "f")
+    if "." in text:
+        text = text.rstrip("0").rstrip(".") or "0"
+    decimals = len(text.split(".", 1)[1]) if "." in text else 0
+    if decimals == 0:
+        text += ".00"
+    elif decimals == 1:
+        text += "0"
+    return text
 
 REQUIRED_PAYABLE_KEYS = {
     "invoice_number", "invoice_date", "due_date", "invoice_type", "currency", "supplier", "buyer",
@@ -190,6 +205,244 @@ def resolve_line_components(payable: dict[str, Any]) -> tuple[dict[str, Any], li
             })
             line["quantity"] = accepted
     return resolved, changes
+
+
+def _printed_gross(payable: dict[str, Any]) -> float | None:
+    raw = str(payable.get("gross_total", "")).strip()
+    if not raw:
+        return None
+    try:
+        return round(float(normalize_decimal(raw)), 2)
+    except (ValueError, TypeError):
+        return None
+
+
+def _booked_gross(payable: dict[str, Any]) -> float | None:
+    try:
+        return round(float(erp_book(payable)["will_book_gross"]), 2)
+    except Exception:
+        return None
+
+
+def resolve_duplicate_taxes(payable: dict[str, Any]) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    """De-duplicate a tax placed at BOTH line and header level.
+
+    Determinism boundary: when the same nonzero rate appears in taxes[] and on
+    line(s), the record double-charges it by construction. Which copy to keep is
+    not guessed — a variant is committed only when it lands *exactly* on the
+    printed gross, with the header copy (which carries the document's printed
+    amount) preferred. If no variant reproduces the printed gross, the record is
+    left untouched and the mismatch stays flagged for review.
+    """
+    changes: list[dict[str, Any]] = []
+    printed = _printed_gross(payable)
+    if printed is None or _booked_gross(payable) == printed:
+        return payable, changes
+
+    header_rates: set[float] = set()
+    for tax in payable.get("taxes") or []:
+        if isinstance(tax, dict):
+            rate = _parse_number(tax.get("tax_rate"))
+            if rate and rate > 0:
+                header_rates.add(rate)
+    if not header_rates:
+        return payable, changes
+
+    duplicated_line_indexes = []
+    for index, line in enumerate(payable.get("line_items") or []):
+        if not isinstance(line, dict):
+            continue
+        rate = _parse_number(line.get("tax_rate"))
+        if rate and rate in header_rates:
+            duplicated_line_indexes.append(index)
+            continue
+        for tax in line.get("taxes") or []:
+            if isinstance(tax, dict):
+                rate = _parse_number(tax.get("tax_rate"))
+                if rate and rate in header_rates:
+                    duplicated_line_indexes.append(index)
+                    break
+    if not duplicated_line_indexes:
+        return payable, changes
+
+    def strip_line_taxes(lines: list[dict[str, Any]], indexes: set[int]) -> list[dict[str, Any]]:
+        stripped = []
+        for index, line in enumerate(lines):
+            if not isinstance(line, dict):
+                stripped.append(line)
+                continue
+            if index in indexes:
+                line = dict(line)
+                line["tax_rate"] = ""
+                line["tax_amount"] = ""
+                line["taxes"] = []
+            stripped.append(line)
+        return stripped
+
+    trial = dict(payable)
+    trial["line_items"] = strip_line_taxes(payable.get("line_items") or [], set(duplicated_line_indexes))
+    if _booked_gross(trial) == printed:
+        changes.append({
+            "kind": "DUPLICATE_TAX_LEVEL_CLEARED",
+            "field_path": f"line_items{[i for i in duplicated_line_indexes]}.tax_rate",
+            "message": (
+                f"the same tax rate(s) {sorted(header_rates)} were placed on both line(s) {duplicated_line_indexes} "
+                "and in taxes[]; the ERP sums the levels independently, so the line copies were removed — "
+                "the corrected draft reproduces the printed gross exactly."
+            ),
+        })
+        return trial, changes
+
+    # Fallback: keep the line-level rates and clear the duplicated header taxes.
+    line_rates: set[float] = set()
+    for line in payable.get("line_items") or []:
+        if not isinstance(line, dict):
+            continue
+        rate = _parse_number(line.get("tax_rate"))
+        if rate and rate > 0:
+            line_rates.add(rate)
+        for tax in line.get("taxes") or []:
+            if isinstance(tax, dict):
+                rate = _parse_number(tax.get("tax_rate"))
+                if rate and rate > 0:
+                    line_rates.add(rate)
+    kept_header = []
+    for tax in payable.get("taxes") or []:
+        if isinstance(tax, dict):
+            rate = _parse_number(tax.get("tax_rate"))
+            if rate and rate > 0 and rate in line_rates:
+                continue
+            kept_header.append(tax)
+        else:
+            kept_header.append(tax)
+    trial2 = dict(payable)
+    trial2["taxes"] = kept_header
+    if len(kept_header) != len(payable.get("taxes") or []) and _booked_gross(trial2) == printed:
+        changes.append({
+            "kind": "DUPLICATE_TAX_LEVEL_CLEARED",
+            "field_path": "taxes",
+            "message": (
+                f"the same tax rate(s) {sorted(line_rates)} were placed on both lines and in taxes[]; the header "
+                "copies were removed — the corrected draft reproduces the printed gross exactly."
+            ),
+        })
+        return trial2, changes
+    return payable, changes
+
+
+def recompute_printed_formula_taxes(payable: dict[str, Any]) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    """Snap header tax amounts to the exact product of a printed rate and base.
+
+    Some documents print a tax as "rate applied to a named base" and display the
+    rounded figure, while the printed net amount is computed from the *unrounded*
+    product — leaving the faithful-looking components one or two cents off. When
+    a header tax's base is uniquely identifiable among the line bases (only one
+    subset of lines reproduces the stated amount from the stated rate), the
+    amount becomes that exact product. Committed only when the corrected draft
+    reproduces the printed gross exactly; otherwise untouched.
+    """
+    changes: list[dict[str, Any]] = []
+    printed = _printed_gross(payable)
+    if printed is None:
+        return payable, changes
+    booked = _booked_gross(payable)
+    if booked is None or booked == printed or abs(booked - printed) > 0.05:
+        return payable, changes
+
+    lines = payable.get("line_items") or []
+    if len(lines) > 20:
+        return payable, changes
+    # Only nonzero bases participate: zero-base rows (e.g. an unused fuel meter)
+    # would otherwise multiply equivalent subsets and mask uniqueness.
+    line_bases: list[float] = []
+    for line in lines:
+        if not isinstance(line, dict):
+            continue
+        qty = _parse_number(line.get("quantity")) or 0.0
+        price = _parse_number(line.get("unit_price")) or 0.0
+        disc_pct = abs(_parse_number(line.get("discount_percentage")) or 0.0)
+        disc_amt = abs(_parse_number(line.get("discount")) or 0.0)
+        sub_total = qty * price
+        if disc_pct > 0:
+            base = round(sub_total - (sub_total * disc_pct / 100.0), 2)
+        elif disc_amt > 0 and qty != 0:
+            base = round((price - (disc_amt / abs(qty))) * qty, 2)
+        else:
+            base = round(sub_total, 2)
+        if base != 0:
+            line_bases.append(base)
+
+    def subsets_matching(target_amount: float, rate: float) -> list[tuple[int, ...]]:
+        """Nonzero-base subsets whose sum x rate reproduces the stated amount."""
+        target_base = target_amount * 100.0 / rate
+        # Tolerance in amount-space (a displayed rounding is +-1 cent), expressed
+        # on the base by dividing by the rate.
+        tolerance = 0.02 * 100.0 / rate
+        matches: list[tuple[int, ...]] = []
+        n = len(line_bases)
+        for mask in range(1, 1 << n):
+            base_sum = 0.0
+            chosen = []
+            for i in range(n):
+                if mask & (1 << i):
+                    base_sum += line_bases[i]
+                    chosen.append(i)
+            if base_sum <= 0:
+                continue
+            if abs(base_sum - target_base) <= tolerance:
+                matches.append(tuple(chosen))
+                if len(matches) > 8:
+                    return matches
+        return matches
+
+    trial = copy.deepcopy(payable)
+    snapped_any = False
+    for tax_index, tax in enumerate(trial.get("taxes") or []):
+        if not isinstance(tax, dict):
+            continue
+        rate = _parse_number(tax.get("tax_rate"))
+        amount = _parse_number(tax.get("tax_amount"))
+        if not rate or not amount or rate <= 0 or amount <= 0:
+            continue
+        matches = subsets_matching(amount, rate)
+        if len(matches) != 1:
+            continue
+        base_sum = round(sum(line_bases[i] for i in matches[0]), 2)
+        # Exact decimal product of the printed base and the printed rate — the
+        # document's own formula, without float noise.
+        exact_product = Decimal(str(base_sum)) * Decimal(str(rate)) / Decimal("100")
+        if abs(exact_product - Decimal(str(amount))) <= Decimal("0.02") and abs(exact_product - Decimal(str(amount))) > Decimal("1e-9"):
+            trial["taxes"][tax_index]["tax_amount"] = _format_amount(exact_product)
+            snapped_any = True
+    if not snapped_any:
+        return payable, changes
+    if _booked_gross(trial) == printed:
+        for tax_index, original in enumerate(payable.get("taxes") or []):
+            new_amount = trial["taxes"][tax_index]["tax_amount"]
+            if isinstance(original, dict) and new_amount != original.get("tax_amount"):
+                changes.append({
+                    "kind": "PRINTED_FORMULA_TAX_SNAPPED",
+                    "field_path": f"taxes[{tax_index}].tax_amount",
+                    "before": str(original.get("tax_amount", "")),
+                    "after": new_amount,
+                    "message": (
+                        f"tax {original.get('tax_name', '')!r}: the document states the rate {original.get('tax_rate')} "
+                        f"applied to a uniquely identifiable base; the exact product {new_amount} (vs the rounded "
+                        f"display {original.get('tax_amount')!r}) reproduces the printed gross exactly."
+                    ),
+                })
+        return trial, changes
+    return payable, changes
+
+
+def apply_deterministic_repairs(payable: dict[str, Any]) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    """Run every math-certain repair, in order; each is exact-match gated."""
+    payable, changes = resolve_line_components(payable)
+    payable, dup_changes = resolve_duplicate_taxes(payable)
+    changes.extend(dup_changes)
+    payable, formula_changes = recompute_printed_formula_taxes(payable)
+    changes.extend(formula_changes)
+    return payable, changes
 
 
 def shape_errors(payable: dict[str, Any]) -> list[str]:

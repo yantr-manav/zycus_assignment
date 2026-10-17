@@ -114,6 +114,71 @@ def test_component_resolver_never_touches_tax_inclusive_totals():
     assert changes == []
 
 
+def test_duplicate_tax_resolver_clears_line_copies_when_exact():
+    from payable_ai.validation import apply_deterministic_repairs
+    # Line rate 20 duplicates the header VAT; clearing the line copies lands exactly on the printed gross.
+    payable = {
+        "currency": "GBP", "gross_total": "5076.17", "total_tax_amount": "846.03",
+        "discount_amount": "", "freight_charges": "", "insurance_charges": "", "extra_charges": "", "excise_duties": "",
+        "taxes": [{"tax_type": "VAT", "tax_name": "VAT", "tax_rate": "20", "tax_amount": "846.03", "tax_type_code": ""}],
+        "line_items": [
+            {"description": "a", "quantity": "6", "unit_price": "457.24", "total": "2743.44",
+             "discount": "", "discount_percentage": "", "tax_rate": "20", "tax_amount": "", "taxes": []},
+            {"description": "b", "quantity": "2", "unit_price": "743.35", "total": "1486.70",
+             "discount": "", "discount_percentage": "", "tax_rate": "20", "tax_amount": "", "taxes": []},
+        ],
+    }
+    resolved, changes = apply_deterministic_repairs(payable)
+    assert all(line["tax_rate"] == "" and line["taxes"] == [] for line in resolved["line_items"])
+    assert resolved["taxes"][0]["tax_amount"] == "846.03"
+    assert any(c["kind"] == "DUPLICATE_TAX_LEVEL_CLEARED" for c in changes)
+
+
+def test_duplicate_tax_resolver_never_fires_without_exact_match():
+    from payable_ai.validation import resolve_duplicate_taxes
+    # Clearing the line rate does NOT reproduce the printed gross (the doc genuinely charges both).
+    payable = {
+        "currency": "GBP", "gross_total": "5076.17",
+        "discount_amount": "", "freight_charges": "", "insurance_charges": "", "extra_charges": "", "excise_duties": "",
+        "taxes": [{"tax_type": "VAT", "tax_name": "VAT", "tax_rate": "20", "tax_amount": "846.03", "tax_type_code": ""}],
+        "line_items": [
+            {"description": "a", "quantity": "6", "unit_price": "457.24", "total": "2743.44",
+             "discount": "", "discount_percentage": "", "tax_rate": "20", "tax_amount": "", "taxes": []},
+        ],
+    }
+    resolved, changes = resolve_duplicate_taxes(payable)
+    assert resolved["line_items"][0]["tax_rate"] == "20"  # untouched
+    assert changes == []
+
+
+def test_printed_formula_tax_snaps_to_exact_product():
+    from payable_ai.validation import recompute_printed_formula_taxes
+    # Utility-bill pattern: taxes displayed rounded (105.60 / 7.02) but the printed net
+    # is computed from the unrounded products (105.597 / 7.015) of the printed rate 0.0575.
+    payable = {
+        "currency": "USD", "gross_total": "2487.73", "total_tax_amount": "112.62",
+        "discount_amount": "", "freight_charges": "", "insurance_charges": "", "extra_charges": "", "excise_duties": "",
+        "taxes": [
+            {"tax_type": "TAX", "tax_name": "Sales tax at 0.0575 on utility bills", "tax_rate": "5.75", "tax_amount": "105.60", "tax_type_code": ""},
+            {"tax_type": "TAX", "tax_name": "Sales tax at 0.0575 on building services", "tax_rate": "5.75", "tax_amount": "7.02", "tax_type_code": ""},
+        ],
+        "line_items": [
+            {"description": "electric", "quantity": "1", "unit_price": "1570.37", "total": "1570.37", "discount": "", "discount_percentage": "", "tax_rate": "", "tax_amount": "", "taxes": []},
+            {"description": "demand", "quantity": "1", "unit_price": "266.10", "total": "266.10", "discount": "", "discount_percentage": "", "tax_rate": "", "tax_amount": "", "taxes": []},
+            {"description": "generator", "quantity": "1", "unit_price": "0.00", "total": "0.00", "discount": "", "discount_percentage": "", "tax_rate": "", "tax_amount": "", "taxes": []},
+            {"description": "energy", "quantity": "1", "unit_price": "393.47", "total": "393.47", "discount": "", "discount_percentage": "", "tax_rate": "", "tax_amount": "", "taxes": []},
+            {"description": "pm", "quantity": "1", "unit_price": "23.18", "total": "23.18", "discount": "", "discount_percentage": "", "tax_rate": "", "tax_amount": "", "taxes": []},
+            {"description": "building", "quantity": "1", "unit_price": "122.00", "total": "122.00", "discount": "", "discount_percentage": "", "tax_rate": "", "tax_amount": "", "taxes": []},
+        ],
+    }
+    resolved, changes = recompute_printed_formula_taxes(payable)
+    amounts = [t["tax_amount"] for t in resolved["taxes"]]
+    assert amounts[0] == "105.597025" and amounts[1] == "7.015"
+    assert any(c["kind"] == "PRINTED_FORMULA_TAX_SNAPPED" for c in changes)
+    from erp import erp_book
+    assert round(erp_book(resolved)["will_book_gross"], 2) == 2487.73
+
+
 def test_component_resolver_fills_empty_quantity_from_exact_quotient():
     from payable_ai.validation import resolve_line_components
     payable = {"taxes": [], "line_items": [

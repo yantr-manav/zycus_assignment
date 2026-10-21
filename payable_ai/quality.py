@@ -127,4 +127,22 @@ def semantic_issues(payable: dict[str, Any]) -> list[dict[str, str]]:
     if declared_tax is not None and tax_total_known and taxes and not has_line_tax and abs(declared_tax - tax_amount_total) > Decimal("0.02"):
         add("DECLARED_TAX_DIFFERENCE", "warning", "Declared total_tax_amount differs from explicit header taxes; verify whether another tax/withholding component is represented elsewhere")
 
+    # The brief's named anti-pattern: prices submitted as if net while the tax is
+    # only declared, never represented. The gross may foot (inclusive prices plus
+    # no tax), but the record does not show the tax the document charges.
+    if declared_tax is not None and declared_tax > 0 and not has_line_tax:
+        header_contribution = Decimal("0")
+        for tax in taxes:
+            if not isinstance(tax, dict):
+                continue
+            header_contribution += _decimal(tax.get("tax_amount")) or Decimal("0")
+            rate_value = _decimal(tax.get("tax_rate"))
+            if rate_value and rate_value > 0 and not (tax.get("tax_amount") or "").strip():
+                header_contribution += Decimal("1")  # rate-only taxes are derived, so they do represent tax
+        if header_contribution == 0:
+            add(
+                "DECLARED_TAX_NOT_REPRESENTED", "warning",
+                "The document declares tax but no submitted tax component represents it (tax may be embedded in line prices); inspect tax placement",
+            )
+
     return issues

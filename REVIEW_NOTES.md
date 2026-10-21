@@ -13,6 +13,7 @@ Every payable in `output/` recomputes through the sealed `erp.py` to the amount 
 | `INV-10.json` | currency missing | The page does not print an ISO currency code; left blank rather than guessed (the ERP reconciles the amounts regardless). |
 | `INV-34.json` | currency missing | Same as above. |
 | `INV-25.json` | line extension mismatch (2 lines) | Expected for this tax-inclusive invoice: the printed column is inclusive (“P.VENDA C/IVA”) while `unit_price` is the documented net decomposition; the payable reconciles to the printed total exactly. |
+| `INV-06.json` | declared tax not represented | **Known structural weakness, flagged not hidden:** the receipt's prices are tax-inclusive and this extraction kept them as net prices with an empty VAT entry, so the gross foots but the VAT is carried inside the prices. The correct representation (net line bases + header VAT 15% at the printed 169.83) requires a vision re-read with working provider credentials; the flag exists so the record cannot silently pass as structurally clean. |
 | `INV-26.json` | line 19 has no description | The source page prints no description for that row (verified at high magnification). The row’s quantity/price/amount are faithful, and the table sums exactly to the printed total. |
 | `INV-32.json` | line 2 has no description | Same class as above: no description printed for that row on the source page. |
 
@@ -26,3 +27,12 @@ Every payable in `output/` recomputes through the sealed `erp.py` to the amount 
 - `DU-03.pdf` — a 12-page dossier yielding two payables (freight 1,040.06 USD; goods 4,499.00 EUR); permits and waybills declined.
 
 Full per-document repair details, provider attempts, ERP facts and accepted changes are in the run diagnostics (`logs/run.jsonl`); regenerate with the commands in `README.md`.
+
+## Deferred structural polish (bookings unaffected)
+
+Four records would benefit from a fresh vision pass to improve field/structure fidelity. They were held back because the provider credential file in the working tree was replaced (the current `.env` belongs to an unrelated project: one invalid Gemini key, no Groq/OpenRouter/Cloudflare credentials), so no API route was available. None of these affects the execution anchor — all four already book exactly:
+
+- `INV-01` — `supplier.name` currently holds the recipient (“Northwind Operations OÜ”, the “Herrn …” addressee); the issuer's name is not printed on the page, so the faithful value is an empty supplier name. The new party-role prompt rule addresses this on any re-run.
+- `INV-06` — the tax-inclusive representation described above (the new `DECLARED_TAX_NOT_REPRESENTED` warning keeps it visible).
+- `INV-19` — currency should be `GHS` (the page prints `GH₵`; the record carries the legacy `GHC`). The new ISO-currency prompt rule addresses this.
+- `HLD-08` — `po_number` should capture `9267418170` printed under “Your Reference”. The new reference-field prompt rule addresses this.

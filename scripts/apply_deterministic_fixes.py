@@ -17,6 +17,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from payable_ai.validation import apply_deterministic_repairs, reconcile, shape_errors
+from payable_ai.normalization import normalize_currency_code
 
 
 def main() -> int:
@@ -34,10 +35,20 @@ def main() -> int:
         for payable in data["payables"]:
             if not isinstance(payable, dict):
                 continue
+            # Pure normalization replay (idempotent, deterministic): currency code.
+            normalized_currency = normalize_currency_code(payable.get("currency"))
+            if normalized_currency != payable.get("currency"):
+                print(f"{path.stem}: CURRENCY_NORMALIZED {payable.get('currency')!r} -> {normalized_currency!r}")
+                payable["currency"] = normalized_currency
+                dirty = True
             before = reconcile(payable).get("status")
             resolved, changes = apply_deterministic_repairs(payable)
             after = reconcile(resolved).get("status")
-            if changes and after == "MATCH" and after != before and not shape_errors(resolved):
+            # Every mechanism inside apply_deterministic_repairs is exact-gated on
+            # its own printed evidence, so a replay over an already-matching record
+            # may still refine representation (e.g. minimal-precision tax amounts).
+            # The write requires the final state to reconcile and stay schema-clean.
+            if changes and after == "MATCH" and not shape_errors(resolved):
                 payable.clear()
                 payable.update(resolved)
                 dirty = True

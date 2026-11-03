@@ -54,8 +54,8 @@ flowchart TD
 | `payable_ai/llm.py` | Four provider routes (Gemini, Groq, OpenRouter, Cloudflare) with model ladders, per-model caps and calibration (reasoning disabled on OpenRouter extraction turns; verified vision registry for Cloudflare), chunked text route with conservative merge, correction signal on re-reads, error classification (invalid / quota / request / transient), read timeouts and per-document wall-clock budgets, redacted `Settings.__repr__` | Rotation is availability, not consensus; correctness is decided by the deterministic layer |
 | `payable_ai/prompting.py` | Stable-prefix extraction reference; signal-driven repair rules; clear/removal protocol | Documents are untrusted data; prompts state _how the ERP computes_ and translation rules, never per-document answers |
 | `payable_ai/signals.py` | ERP trace (per-line bases, per-tax contributions and bases, charges) + fact signals (gross delta, line-vs-printed deltas, declared-vs-component tax, missing-row gap) | Facts only — no remedies; the trace is withheld if it disagrees with the sealed calculator |
-| `payable_ai/normalization.py` | Number/date/currency normalization, credit semantics, schema shape | Never synthesizes a missing amount |
-| `payable_ai/validation.py` | Schema checks, reconciliation, grounded repair semantics, and the math-certain deterministic repairs: quantity resolver, duplicate-tax-level resolver, printed-formula tax snapper (each exact-match gated) | Removals and deterministic repairs require exact reconciliation; the quantity resolver fires only when the arithmetic pins one value |
+| `payable_ai/normalization.py` | Number/date/currency normalization (including legacy ISO codes such as `GHC`/`GH₵` → `GHS`), credit semantics, schema shape | Never synthesizes a missing amount; only documented mappings are applied |
+| `payable_ai/validation.py` | Schema checks, reconciliation, grounded repair semantics, and the math-certain deterministic repairs: quantity resolver, duplicate-tax-level resolver, printed-formula tax snapping (least uniform precision that still reproduces the printed gross) | Removals and deterministic repairs require exact reconciliation; the quantity resolver fires only when the arithmetic pins one value; the snapper never exploits floating-point artifacts |
 | `payable_ai/master_data.py` | Indexed master-data resolution | Unmatched/ambiguous codes stay blank; no generated IDs |
 | `payable_ai/quality.py` | Semantic checks: line extension vs components, tax at both levels, declared vs component tax, missing evidence | Warnings trigger review; they never auto-correct money |
 | `payable_ai/evidence.py` | Verifies model-returned source quotes against page text | Visual-only evidence is reported as unverified, not assumed |
@@ -78,6 +78,10 @@ flowchart TD
 - Every call is `[stable prefix][variable tail]`: system instruction + extraction reference (byte-stable across all documents) precede filename, document text, draft and task.
 - The item to act on (page text, or the draft under repair with its facts) sits at the **bottom** of the turn, where attention is most reliable.
 - On Gemini, extraction and repair share one conversation per document, so the provider's implicit prefix cache can hit on the static prefix and the repair turn pays only for its delta.
+
+## Text and OCR tooling (evaluated, deliberately scoped)
+
+`PyMuPDF` provides embedded text, page rendering, and page images for the vision routes; Tesseract provides local OCR for scanned pages and the text-only routes. `pdfplumber`, `Docling`, and `PaddleOCR` were evaluated and **not adopted**: every digital-PDF document in this corpus already extracts and reconciles through PyMuPDF text, and every scanned document is either read by vision or by Tesseract with quotes verified against that text — there is no evidence that an additional table/OCR dependency improves a result, and the brief is explicit about not adding unnecessary dependencies. The architecture keeps the boundary clean: a richer table extractor would slot in at `pdf_io` as another text source without touching the rest of the pipeline.
 
 ## Provider routing and quota engineering
 

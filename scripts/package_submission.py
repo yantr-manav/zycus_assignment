@@ -27,7 +27,7 @@ CORE_FILES = [
     "requirements.txt", "main.py", "erp.py", "example_check.py", "sample_autodraft.json",
     "VERIFICATION.md", "REVIEW_NOTES.md", "Dockerfile", ".dockerignore",
 ]
-CORE_DIRS = ["documents", "master_data", "payable_ai", "tests", "scripts"]
+CORE_DIRS = ["documents", "master_data", "payable_ai", "tests", "scripts", "docs"]
 
 
 def _reference_codes(root: Path) -> dict[str, set[str]]:

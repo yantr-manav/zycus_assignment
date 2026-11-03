@@ -150,11 +150,46 @@ python main.py --provider groq   --only INV-25
 # G. Offline validation of existing outputs — no API calls
 python main.py --validate-output --input documents --output output
 
-# H. Tests
+# H. Replay the deterministic (math-certain) repairs over existing outputs — no API calls
+python scripts/apply_deterministic_fixes.py
+
+# I. Tests (deterministic; the live smoke test is skipped unless enabled)
 python -m pytest -q
+
+# J. Live provider smoke test (opt-in; needs credentials and quota)
+$env:PAYABLE_AI_LIVE_SMOKE='1'; python -m pytest tests/test_live_smoke.py -q
 ```
 
-The run writes `output/<PDF-stem>.json`, one per input PDF, and streams diagnostics to `logs/run.jsonl` (provider attempts, per-line ERP facts, repair rounds, master matches, evidence audits). On an unrecoverable provider failure the batch continues but marks the file `ERROR_NO_VALID_EXTRACTION` — **that placeholder is not a submission artifact**; re-run it after fixing the cause. `--validate-output` reports coverage, schema, semantics, and reconciliation without calls.
+The run writes `output/<PDF-stem>.json`, one per input PDF, and streams diagnostics to `logs/run.jsonl` (provider attempts, per-line ERP facts, repair rounds, master matches, evidence audits). On an unrecoverable provider failure the batch continues but marks the file `ERROR_NO_VALID_EXTRACTION` — **that placeholder is not a submission artifact**; re-run it after fixing the cause. `--validate-output` reports coverage, schema, semantics, and reconciliation without calls. The test suite is deterministic and offline by default; the live smoke test is the only module that touches a provider and is skipped unless `PAYABLE_AI_LIVE_SMOKE=1` is set.
+
+## Repository layout
+
+```text
+├── main.py                      CLI: batch run, --only, --diagnose, --check-config, --validate-output
+├── erp.py                       sealed ERP recompute (unchanged from the candidate kit)
+├── payable_ai/
+│   ├── pipeline.py              orchestration, bounded repair loop, completeness re-read
+│   ├── llm.py                   provider adapters + pools + ladders + budgets
+│   ├── keys.py                  key pools, rotation, pacing, redaction
+│   ├── prompting.py             stable-prefix prompts; signals-driven repair protocol
+│   ├── signals.py               deterministic ERP facts + completeness signal
+│   ├── validation.py            schema, reconciliation, grounding, deterministic repairs
+│   ├── normalization.py         numbers, dates, currency (incl. legacy ISO codes), credit semantics
+│   ├── master_data.py           indexed master-data resolution (exact-first, ambiguity blank)
+│   ├── quality.py               semantic checks and honest flags
+│   ├── evidence.py              source-quote verification
+│   ├── pdf_io.py                PyMuPDF text, page rendering, bounded OCR, page-aware splitting
+│   └── config.py                environment-driven settings (redacted repr)
+├── scripts/
+│   ├── package_submission.py    validation-gated submission packaging
+│   ├── apply_deterministic_fixes.py   offline replay of math-certain repairs
+│   └── rerun_failing.py         re-run only documents that fail reconciliation
+├── tests/                       deterministic unit/integration tests + opt-in live smoke
+├── documents/                   the 42 candidate PDFs
+├── master_data/                 supplied reference data
+├── output/                      one generated JSON per input PDF (graded artifacts)
+└── docs/PRODUCTION.md           accuracy, latency, cost, reliability, compliance plan
+```
 
 ## 5. Output contract
 
@@ -169,7 +204,9 @@ The loop is the point, so here is the machinery in one paragraph each: **(1) Sig
 - OCR can confuse separators, `0/O`, `1/I`, minus signs, and table columns; a low-confidence page routes to vision, never to silent confidence.
 - Dense tables need a strong reader: on the 35-row Malaysian invoice, two independent high-magnification reads (and a free-tier vision model) missed a row whose amount is printed beside a section label; the completeness signal caught the un-footable draft, and the strong vision pass found the row. Free-tier models are economical, not infallible — review the flagged warnings.
 - The deterministic repairs only fire on exact arithmetic; ambiguous cases are left to extraction and the repair loop. A tax-inclusive or pack-scaled line requires the model to translate the printed presentation into ERP components; the layer verifies the result, it cannot manufacture the translation.
-- Buyer identity, currencies and invoice numbers can be genuinely absent from a document; a blank is the correct answer then, not a guess (four such warnings are documented in `VERIFICATION.md`).
+- Buyer identity, currencies and invoice numbers can be genuinely absent from a document; a blank is the correct answer then, not a guess (documented in `VERIFICATION.md` and `REVIEW_NOTES.md`).
+- **Master-data findings (investigated):** this corpus's issuing parties are not rows of the supplied sample masters (verified by reading the issuer blocks on the pages), and the documents' bill-to tenants are not the chart's Bolt entities; blank codes are therefore the honest result. The resolver does match when data corresponds — the kit's worked sample resolves supplier `2845695`, covered by tests. Legacy currency codes are normalized to current ISO 4217 (e.g. `GHC` → `GHS`).
+- **Deferred fidelity re-reads:** four records book to the cent but would benefit from a fresh vision pass for field-level fidelity (`INV-01`/`INV-16` supplier field currently holds the recipient; `INV-06` carries inclusive prices with the VAT flagged as unrepresented; `HLD-08` should capture the “Your Reference” PO; `HLD-05`'s lines restate printed incidence bases as quantities of 1). The general rules that fix all of these are in the prompt, and the faithful HLD-05 representation is proven to book exactly in the regression tests; executing them requires provider credentials, which were unavailable in the final environment.
 - Free tiers have hard, documented quotas (per-model daily buckets, token-per-minute caps, free-model request caps). The ladders, pacing, budgets and resumability make a batch survivable, not instant.
 
 ## 8. Docker (alternative single command)
@@ -181,16 +218,9 @@ docker run --rm -e GEMINI_API_KEY=... -e GROQ_API_KEY=... -v "$PWD/output:/app/o
 
 The image installs Tesseract (English/German/Portuguese language data) and runs the same `python main.py --input documents --output output`. The venv-based flow in §3 is the primary path; Docker is provided so the system can be re-run anywhere with one command.
 
-## 9. Production path (what changes at scale)
+## 9. Production path
 
-This is a production-shaped prototype, not a certified AP system. The deliberate upgrades for a real deployment:
-
-- **Throughput:** replace sequential per-file processing with a queue (one worker per document), provider batch APIs for vision, and idempotent per-document jobs keyed by a content hash so retries never double-book.
-- **Quota & cost:** move to paid tiers with per-tenant budgets; keep the model ladder for version rollouts; add token accounting per document; cache OCR text keyed by document hash (OCR is the expensive local step).
-- **Accuracy:** a labeled gold set with per-field precision/recall (not just gross reconciliation), regression tests for every fixed failure, and prompt/model versioning with shadow evaluation before rollout.
-- **Control:** a human-review queue for every non-`MATCH`, every cleared component, and every below-confidence vision read; four-eyes approval before anything reaches payment; immutable audit events for each accepted change.
-- **Security/compliance:** encrypted storage, PII retention limits, access controls, and a provider data-processing arrangement that forbids training on the tenant’s documents (the free tiers do not qualify).
-- **Scale of reference data:** replace flat JSON masters with indexed lookups (the resolver’s contract — exact IDs first, ambiguity blank — is built to survive a move to a database or search index).
+Accuracy, latency, cost, reliability, compliance, and rollout are specified in [docs/PRODUCTION.md](docs/PRODUCTION.md). In short: a labeled gold set with field-level metrics, human review for every flagged record, queue-based idempotent processing, OCR caching, model-to-difficulty routing, per-tenant budgets, encrypted storage with a provider data-processing agreement (free tiers do not qualify), and a shadow → assist → sampled-auto-book rollout with a kill switch.
 
 ## 10. Submission hygiene
 

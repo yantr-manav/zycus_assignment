@@ -104,6 +104,32 @@ def semantic_issues(payable: dict[str, Any]) -> list[dict[str, str]]:
                 # applied; the discount column then explains the ERP's net base.
                 matches = abs(gross_extension - printed_line_total) <= Decimal("0.02")
             if not matches:
+                # A printed extension may legitimately be tax-inclusive: it equals
+                # the ERP's net base grown by the line's applicable rate. That is a
+                # faithful presentation, not a component mismatch.
+                applicable_rates: list[Decimal] = []
+                line_rate = _decimal(line.get("tax_rate"))
+                if line_rate is not None and line_rate > 0:
+                    applicable_rates.append(line_rate)
+                for tax in line.get("taxes") or []:
+                    if isinstance(tax, dict):
+                        rate_value = _decimal(tax.get("tax_rate"))
+                        if rate_value is not None and rate_value > 0:
+                            applicable_rates.append(rate_value)
+                if not applicable_rates:
+                    nonzero_header_rates = [
+                        rate for rate in (
+                            _decimal(t.get("tax_rate")) for t in taxes if isinstance(t, dict)
+                        ) if rate is not None and rate > 0
+                    ]
+                    if len(set(nonzero_header_rates)) == 1:
+                        applicable_rates = nonzero_header_rates
+                for rate_value in applicable_rates:
+                    inclusive_extension = net_extension * (Decimal("1") + rate_value / Decimal("100"))
+                    if abs(inclusive_extension - printed_line_total) <= Decimal("0.03"):
+                        matches = True
+                        break
+            if not matches:
                 add(
                     "LINE_EXTENSION_MISMATCH", "warning",
                     f"line_items[{index}] quantity × net unit price minus discount differs from printed total; inspect whether line total includes tax or has different semantics",

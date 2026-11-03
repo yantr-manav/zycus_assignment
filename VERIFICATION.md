@@ -6,20 +6,35 @@ Everything below was executed against this working tree. Where a claim depends o
 
 | Check | Command | Result |
 |---|---|---|
-| Test suite | `python -m pytest -q` | **47 passed, 1 skipped** (the opt-in live-provider smoke test) |
+| Test suite | `python -m pytest -q` | **48 passed, 1 skipped** (the opt-in live-provider smoke test) |
 | Output coverage | `python main.py --validate-output --input documents --output output` | **42/42 outputs; 0 missing; 0 malformed** |
 | Schema & semantics | same validator | **0 payables with schema or semantic errors** |
 | ERP reconciliation | same validator (booked gross through the sealed `erp.py` vs the amount each document prints) | **0 payables unreconciled — every payable recomputes to the cent** |
 | Ready flag | same validator | **`ready_for_manual_review: true`** |
 | Execution anchor (reviewer engine) | reviewer kit's `eval/review.py` | **dev 100.0, holdout 100.0, gap 0.0, generality 15/15; `erp.py` untampered; no divergences** |
 
-Quality-actionable warnings were reviewed individually (warnings, not errors): absent invoice numbers on documents that print none (`DU-03` second payable, `HLD-03`, `HLD-10`, `INV-19`), absent printed currency on `INV-10`/`INV-34` (left blank rather than guessed — the pages print no ISO code/symbol evidence), the tax-inclusive line semantics of `INV-25` (printed totals are inclusive; unit prices are the documented net decomposition; the payable reconciles exactly), two genuinely blank descriptions on the source pages (`INV-26` row 19, `INV-32`), and one structural flag on `INV-06` (below). The repair loop, deterministic repairs, and provider routing are recorded per document in `logs/run.jsonl`.
+Quality-actionable warnings were reviewed individually (warnings, not errors): absent invoice numbers on documents that print none (`DU-03` second payable, `HLD-03`, `HLD-10`, `INV-19`), absent printed currency on `INV-10` (left blank rather than guessed — the page prints no ISO code or symbol evidence), the tax-inclusive line semantics of `INV-25` (printed totals are inclusive; unit prices are the documented net decomposition; the payable reconciles exactly), two genuinely blank descriptions on the source pages (`INV-26` row 19, `INV-32`), and one structural flag on `INV-06` (below). The repair loop, deterministic repairs, and provider routing are recorded per document in `logs/run.jsonl`.
+
+### Field-level re-extraction pass (executed this session)
+
+With the provider credentials restored (Gemini key pool live), the six flagged records were re-extracted with the improved prompt rules, each behind a strict acceptance gate (books exactly **and** clears its specific fidelity check; otherwise the previous exact record is restored):
+
+| Document | Attempt result | Kept record |
+|---|---|---|
+| `INV-01` | **improved** — supplier field no longer holds the recipient; the issuer is unnamed on the page, so the supplier name is blank (honest) | 438.00, MATCH |
+| `INV-16` | **improved** — supplier = **Speedwell Express Estonia AS**, VAT = **EE445462205** (the page's KMKR) | 26.47, MATCH |
+| `INV-34` | **improved** — currency = **AUD** (the page prints “$” with an Australian ABN/GST/BPAY context) | 572.00, MATCH |
+| `INV-06` | attempt blocked by transient provider quota; previous exact record restored | 1,683.98, MATCH; tax representation still flagged |
+| `HLD-08` | attempt blocked by transient provider quota; previous exact record restored | 148,941.47, MATCH; reference PO still pending |
+| `HLD-05` | attempted twice; the model still restates printed incidence bases as quantity-1 lines (gate rejected both attempts) | 1,037.94, MATCH; faithful form proven in tests |
+
+The `INV-06`/`HLD-08` retries are one command away whenever quota is available (`python main.py --only "INV-06,HLD-08"` followed by the validator).
 
 ### Known structural weakness, flagged not hidden
 
-`INV-06` (tax-inclusive grocery receipt) **books exactly (1,683.98)** but the current extraction keeps the inclusive amounts as net prices with an empty VAT entry, so the VAT is carried inside the prices instead of being represented as the printed header tax (169.83, 15%). The `DECLARED_TAX_NOT_REPRESENTED` quality check flags exactly this pattern so it cannot silently pass as structurally clean. The faithful re-representation (net line bases plus the printed header VAT, zero-rated items taken from the receipt's own marks) requires a vision re-read; that re-read was not possible in this environment because no stable provider credential file was available (the workspace `.env` was repeatedly absent or replaced by an unrelated project's file during the final sessions). The prompt rule that mandates the representation is in place for the next run.
+`INV-06` (tax-inclusive grocery receipt) **books exactly (1,683.98)** but the current extraction keeps the inclusive amounts as net prices with an empty VAT entry, so the VAT is carried inside the prices instead of being represented as the printed header tax (169.83, 15%). The `DECLARED_TAX_NOT_REPRESENTED` quality check flags exactly this pattern so it cannot silently pass as structurally clean. The faithful re-representation (net line bases plus the printed header VAT, zero-rated items taken from the receipt's own marks) is mandated by the prompt rules; the corrective re-read was blocked by the provider's then-exhausted daily bucket, so the exact previous record is retained and the flag stays visible.
 
-Other deferred field-level re-reads (all already book to the cent): `INV-01` and `INV-16` — the `supplier` field currently holds the recipient (the issuer's name is not printed on `INV-01`; `INV-16`'s issuer is Speedwell Express Estonia AS, printed in the footer); `HLD-08` — `po_number` should capture `9267418170` printed under “Your Reference”; `HLD-05` — the artifact restates each printed incidence base as a quantity-1 line (see below; the faithful representation is proven to book exactly in a regression test). The general prompt rules addressing all of these are in place. See `REVIEW_NOTES.md` for the complete list.
+Remaining pending re-reads (all already book to the cent): `INV-06` (tax representation, above), `HLD-08` (`po_number` should capture `9267418170` printed under “Your Reference”), and `HLD-05` (the artifact restates each printed incidence base as a quantity-1 line — two strong-model attempts still produced that form, the gate rejected both, and the exact record was kept; the fully faithful representation is proven to book exactly 1,037.94 in a regression test). At creation time these were one provider-quota window away; the general prompt rules that address them are in place. See `REVIEW_NOTES.md` for the complete list.
 
 ## How the difficult documents were resolved (all verified against the source pages)
 

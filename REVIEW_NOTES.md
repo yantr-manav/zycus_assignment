@@ -33,13 +33,13 @@ Full per-document repair details, provider attempts, ERP facts and accepted chan
 
 ## Pending re-reads (all bookings exact; no execution-anchor impact)
 
-Three records still benefit from a vision pass. Each re-extraction is gated: a new attempt is kept only when it books exactly and clears its fidelity check, otherwise the previous exact record survives (as happened for `HLD-05`’s two attempts). At creation time the run was blocked by the provider’s free-tier daily bucket; the retry is one command away:
+Three records still benefit from a **vision** pass (the OCR/text route was tried and its attempts were rejected by the gates). Each re-extraction is gated: a new attempt is kept only when it books exactly and clears its fidelity check, otherwise the previous exact record survives.
 
-- `INV-06` — represent the printed VAT (169.83, 15%) as a real tax component with net line bases (the `DECLARED_TAX_NOT_REPRESENTED` warning keeps it visible meanwhile).
-- `HLD-08` — capture `po_number = 9267418170` printed under “Your Reference” (no master PO corresponds, so `po_id` correctly stays blank).
-- `HLD-05` — replace the quantity-1 incidence restatement with the fully faithful lines (proven exact in the regression test).
+- `INV-06` — text-route retry correctly represented the printed VAT (15% / 169.83) but the OCR transcript lacks the receipt's zero-rated row marks, so the base split missed by 43.49 and the gate kept the exact previous record. The `DECLARED_TAX_NOT_REPRESENTED` warning keeps the current gap visible.
+- `HLD-08` — text-route retry correctly captured the printed reference **9267418170**, but OCR misread the line amounts (booked −1,003.20); the gate kept the exact previous record. The PO needs a vision pass (or better OCR) before it can join the exact amounts.
+- `HLD-05` — two vision attempts restated the printed incidence bases as quantity-1 lines; the gate rejected both and kept the exact record. The fully faithful representation is proven exact in the regression test.
 
-Retry command (requires a configured provider with quota):
+Retry command (requires a vision route with quota; gates apply automatically only in the review harness — verify the result with the validator):
 
 ```powershell
 python main.py --only "INV-06,HLD-08,HLD-05"

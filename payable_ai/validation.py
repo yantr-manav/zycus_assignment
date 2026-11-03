@@ -49,7 +49,7 @@ def resolve_line_components(payable: dict[str, Any]) -> tuple[dict[str, Any], li
     """Restore a math-certain component when the printed row arithmetic pins it.
 
     Determinism boundary: when a line prints unit price, discount and row total,
-    the quantity is *provable* â€” it is the only positive value whose ERP line
+    the quantity is *provable* — it is the only positive value whose ERP line
     base reproduces the printed total. This catches locale misreads and pack
     scaling (e.g. "24,000" read as 24000 when 24 is the only solution) without
     ever using the gross target. Applied only when the solution is exact: any
@@ -129,7 +129,7 @@ def resolve_line_components(payable: dict[str, Any]) -> tuple[dict[str, Any], li
         if base is not None and abs(base - total) <= 0.005:
             continue
         # If a tax rate explains the gap, the printed total is simply
-        # tax-inclusive â€” that is not a quantity error, and a tax-inclusive
+        # tax-inclusive — that is not a quantity error, and a tax-inclusive
         # total must never be used to "solve" for the quantity.
         if base is not None and base > 0:
             line_rates = []
@@ -229,7 +229,7 @@ def resolve_duplicate_taxes(payable: dict[str, Any]) -> tuple[dict[str, Any], li
 
     Determinism boundary: when the same nonzero rate appears in taxes[] and on
     line(s), the record double-charges it by construction. Which copy to keep is
-    not guessed â€” a variant is committed only when it lands *exactly* on the
+    not guessed — a variant is committed only when it lands *exactly* on the
     printed gross, with the header copy (which carries the document's printed
     amount) preferred. If no variant reproduces the printed gross, the record is
     left untouched and the mismatch stays flagged for review.
@@ -287,7 +287,7 @@ def resolve_duplicate_taxes(payable: dict[str, Any]) -> tuple[dict[str, Any], li
             "field_path": f"line_items{[i for i in duplicated_line_indexes]}.tax_rate",
             "message": (
                 f"the same tax rate(s) {sorted(header_rates)} were placed on both line(s) {duplicated_line_indexes} "
-                "and in taxes[]; the ERP sums the levels independently, so the line copies were removed â€” "
+                "and in taxes[]; the ERP sums the levels independently, so the line copies were removed — "
                 "the corrected draft reproduces the printed gross exactly."
             ),
         })
@@ -323,7 +323,7 @@ def resolve_duplicate_taxes(payable: dict[str, Any]) -> tuple[dict[str, Any], li
             "field_path": "taxes",
             "message": (
                 f"the same tax rate(s) {sorted(line_rates)} were placed on both lines and in taxes[]; the header "
-                "copies were removed â€” the corrected draft reproduces the printed gross exactly."
+                "copies were removed — the corrected draft reproduces the printed gross exactly."
             ),
         })
         return trial2, changes
@@ -335,7 +335,7 @@ def recompute_printed_formula_taxes(payable: dict[str, Any]) -> tuple[dict[str, 
 
     Some documents print a tax as "rate applied to a named base" and display the
     rounded figure, while the printed net amount is computed from the *unrounded*
-    product â€” leaving the faithful-looking components one or two cents off. When
+    product — leaving the faithful-looking components one or two cents off. When
     a header tax's base is uniquely identifiable among the line bases (only one
     subset of lines reproduces the stated amount from the stated rate), the
     amount becomes that exact product. Committed only when the corrected draft
@@ -349,9 +349,9 @@ def recompute_printed_formula_taxes(payable: dict[str, Any]) -> tuple[dict[str, 
     if booked is None or abs(booked - printed) > 0.05:
         return payable, changes
     # Two operating modes, both exact-gated against the printed gross:
-    #  * booked != printed â€” the displayed rounding of a printed formula hides
+    #  * booked != printed — the displayed rounding of a printed formula hides
     #    the value the document's own arithmetic used (normal snapping);
-    #  * booked == printed â€” the record is exact, but a formula-derived amount
+    #  * booked == printed — the record is exact, but a formula-derived amount
     #    may still carry more decimal places than the document warrants
     #    (precision hygiene: trim to the least precision that stays exact).
     refining_only = booked == printed
@@ -618,7 +618,7 @@ def _path_context_ok(path: str, quote: str) -> bool:
             return False
     elif leaf == "tax_amount":
         cues = ("taxamount", "vatamount", "gstamount", "taxvalue", "withholding", "taxdeducted", "amountoftax", "tax charged", "vat charged", "gst charged")
-        has_amount_marker = any(c in q for c in ("amount", "value", "withholding", "deducted", "charged", "payable tax")) or any(c in q_raw for c in ("â‚¬", "$", "Â£", "Â¥", "â‚¹"))
+        has_amount_marker = any(c in q for c in ("amount", "value", "withholding", "deducted", "charged", "payable tax")) or any(c in q_raw for c in ("€", "$", "£", "¥", "₹"))
         has_tax_label = any(c in q for c in ("tax", "vat", "gst", "mwst", "nhil", "getfl", "iva", "withholding"))
         if not (has_amount_marker and has_tax_label):
             return False
@@ -704,7 +704,7 @@ def _grounded_quote(path: str, quote: str, proposed_value: str, source_text: str
     proposed_number = canonical_number(str(proposed_value))
     if not proposed_number:
         return False, "proposed value is not a normalizable number"
-    number_pattern = re.compile(r"(?<![A-Za-z])[-+]?\(?\d[\d.,'â€™ ]*\d?%?\)?(?![A-Za-z])")
+    number_pattern = re.compile(r"(?<![A-Za-z])[-+]?\(?\d[\d.,'’ ]*\d?%?\)?(?![A-Za-z])")
 
     # Rule 1 of the brief: every value the system emits must appear on the document.
     # This also stops a fuzzy quote match from smuggling in a value that differs from
@@ -771,7 +771,7 @@ def _grounded_quote(path: str, quote: str, proposed_value: str, source_text: str
             continue
         if leaf == "tax_amount":
             nearby = quote[max(0, start - 12):min(len(quote), end + 16)]
-            has_currency = any(symbol in nearby for symbol in ("â‚¬", "$", "Â£", "Â¥", "â‚¹"))
+            has_currency = any(symbol in nearby for symbol in ("€", "$", "£", "¥", "₹"))
             has_amount_label = any(word in norm_text(nearby) for word in ("amount", "value", "charged", "withheld", "deducted"))
             if not (has_currency or has_amount_label):
                 continue

@@ -19,7 +19,7 @@
         "location_code": ""
       },
       "payment_term_id": "",
-      "po_number": "",
+      "po_number": "9267418170",
       "po_id": "",
       "gross_total": "148941.47",
       "subtotal": "129514.32",
@@ -29,10 +29,18 @@
       "insurance_charges": "",
       "extra_charges": "",
       "excise_duties": "",
-      "taxes": [],
+      "taxes": [
+        {
+          "tax_type": "VAT",
+          "tax_name": "Tax",
+          "tax_rate": "15",
+          "tax_amount": "19427.15",
+          "tax_type_code": "ZAF_150_VAT"
+        }
+      ],
       "line_items": [
         {
-          "description": "Hall's Smooth Fruit Punch 1lt M 337521",
+          "description": "Hall's Smooth Fruit Punch 1lt M 337521 WT037912 CG",
           "item_type": "GOODS",
           "uom": "1000",
           "quantity": "468",
@@ -40,8 +48,8 @@
           "total": "129514.32",
           "discount": "",
           "discount_percentage": "",
-          "tax_rate": "15",
-          "tax_amount": "19427.15",
+          "tax_rate": "",
+          "tax_amount": "",
           "taxes": []
         }
       ]

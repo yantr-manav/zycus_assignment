@@ -6,7 +6,7 @@
       "invoice_date": "",
       "due_date": "",
       "invoice_type": "INVOICE",
-      "currency": "GHC",
+      "currency": "GHS",
       "supplier": {
         "name": "Redwood Technologies",
         "supplier_id": "",

@@ -12,6 +12,21 @@ PAYABLE_KEYS = [
 TAX_KEYS = ["tax_type", "tax_name", "tax_rate", "tax_amount", "tax_type_code"]
 LINE_KEYS = ["description", "item_type", "uom", "quantity", "unit_price", "total", "discount", "discount_percentage", "tax_rate", "tax_amount", "taxes"]
 
+# Legacy or mis-transcribed currency identifiers -> current ISO 4217 codes.
+# Applied like any other normalization: a printed symbol or withdrawn code is
+# mapped to the standard the schema asks for; unknown codes pass through and
+# are reported by the quality checks rather than guessed.
+_CURRENCY_NORMALIZATION = {
+    "GHC": "GHS",      # Ghana cedi: pre-redenomination code still printed on some invoices
+    "GH₵": "GHS",     # Ghana cedi symbol
+    "₵": "GHS",       # bare cedi sign
+}
+
+
+def normalize_currency_code(value: Any) -> str:
+    code = as_str(value).upper()
+    return _CURRENCY_NORMALIZATION.get(code, code)
+
 
 def as_str(value: Any) -> str:
     if value is None:
@@ -156,7 +171,7 @@ def normalize_payable(raw: Any, masters: MasterData) -> tuple[dict[str, Any], di
     payment_term_id, payment_term_match = masters.resolve_payment_term(
         as_str(raw.get("payment_term_text")), as_str(raw.get("invoice_date")), as_str(raw.get("due_date"))
     )
-    currency = as_str(raw.get("currency")).upper()
+    currency = normalize_currency_code(as_str(raw.get("currency")).upper())
     po_number = as_str(raw.get("po_number"))
     po_id, po_match = masters.resolve_po(po_number, supplier_id, currency)
 

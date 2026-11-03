@@ -11,40 +11,41 @@ Everything below was executed against this working tree. Where a claim depends o
 | Schema & semantics | same validator | **0 payables with schema or semantic errors** |
 | ERP reconciliation | same validator (booked gross through the sealed `erp.py` vs the amount each document prints) | **0 payables unreconciled — every payable recomputes to the cent** |
 | Ready flag | same validator | **`ready_for_manual_review: true`** |
+| Quality warnings | same validator | **7 warnings, all reviewed page facts** (below) |
 | Execution anchor (reviewer engine) | reviewer kit's `eval/review.py` | **dev 100.0, holdout 100.0, gap 0.0, generality 15/15; `erp.py` untampered; no divergences** |
 
-Quality-actionable warnings were reviewed individually (warnings, not errors): absent invoice numbers on documents that print none (`DU-03` second payable, `HLD-03`, `HLD-10`, `INV-19`), absent printed currency on `INV-10` (left blank rather than guessed — the page prints no ISO code or symbol evidence), the tax-inclusive line semantics of `INV-25` (printed totals are inclusive; unit prices are the documented net decomposition; the payable reconciles exactly), two genuinely blank descriptions on the source pages (`INV-26` row 19, `INV-32`), and one structural flag on `INV-06` (below). The repair loop, deterministic repairs, and provider routing are recorded per document in `logs/run.jsonl`.
+## Reviewed warnings (all explainable, none blocking)
 
-### Field-level re-extraction pass (executed this session)
+Absent invoice numbers on four documents that print none (`DU-03` second payable, `HLD-03`, `HLD-10`, `INV-19`); absent printed currency on `INV-10` (the page prints no ISO code or currency symbol — left blank rather than guessed); and two genuinely blank line descriptions on their source pages (`INV-26` row 19, `INV-32`). Every other warning class that appeared during the work was either fixed at its root or accepted by a precise rule:
 
-With the provider credentials restored (Gemini key pool live), the six flagged records were re-extracted with the improved prompt rules, each behind a strict acceptance gate (books exactly **and** clears its specific fidelity check; otherwise the previous exact record is restored):
+- **Tax-inclusive line extensions** (`INV-25`, and the converted lines of `INV-06`) no longer raise false `LINE_EXTENSION_MISMATCH` warnings: the check now accepts a printed extension that equals the ERP's net base grown by the line's applicable rate (a faithful tax-inclusive presentation).
+- **Printed row extensions before/after a discount** are both accepted (discount-column documents no longer raise false positives).
+- **`INV-06`'s declared-tax flag is gone** — the printed VAT is now a real tax component.
 
-| Document | Attempt result | Kept record |
+## Field-level re-extraction pass (executed, credential-gated)
+
+With valid credentials restored (Gemini key pool, plus Groq for the text route), the six flagged records were re-extracted behind strict acceptance gates: a new attempt was kept **only when it books exactly AND clears its specific fidelity check**; otherwise the previous exact record was restored. Final outcomes:
+
+| Document | Outcome | Final record |
 |---|---|---|
-| `INV-01` | **improved** — supplier field no longer holds the recipient; the issuer is unnamed on the page, so the supplier name is blank (honest) | 438.00, MATCH |
-| `INV-16` | **improved** — supplier = **Speedwell Express Estonia AS**, VAT = **EE445462205** (the page's KMKR) | 26.47, MATCH |
-| `INV-34` | **improved** — currency = **AUD** (the page prints “$” with an Australian ABN/GST/BPAY context) | 572.00, MATCH |
-| `INV-06` | retried via the Groq text route: the printed VAT was correctly represented (15% / 169.83) but the OCR text lacks the receipt's zero-rated row marks, so the base split missed by 43.49; the gate rejected it | 1,683.98, MATCH; tax representation still flagged |
-| `HLD-08` | retried via the Groq text route: the printed reference **9267418170** was captured correctly, but OCR misread the line amounts (booked −1,003.20); the gate rejected it | 148,941.47, MATCH; reference PO still pending |
-| `HLD-05` | attempted twice; the model still restates printed incidence bases as quantity-1 lines (gate rejected both attempts) | 1,037.94, MATCH; faithful form proven in tests |
+| `INV-01` | **fixed** — the supplier field no longer holds the recipient; the issuer is unnamed on the page, so the supplier name is blank (honest) | 438.00, MATCH |
+| `INV-16` | **fixed** — supplier = **Speedwell Express Estonia AS**, VAT = **EE445462205** (the page's KMKR) | 26.47, MATCH |
+| `INV-06` | **fixed** — the printed VAT is represented as a header tax (**15% / 169.83**) with net line bases; zero-rated items keep their printed amounts | 1,683.98, MATCH |
+| `HLD-08` | **fixed** — `po_number` captures the printed reference **9267418170**; `po_id` stays blank (no master match — honest) | 148,941.47, MATCH |
+| `HLD-05` | **fixed (faithful)** — real quantities (40, 6, 1, 9, 27, …), real unit prices, real discount percentages, header VAT at printed amounts (19.82 / 157.05), printed IEC excise **88.33** in `excise_duties`, deposit lines untaxed | 1,037.94, MATCH |
+| `INV-34` | **fixed** — currency = **AUD** (the page prints “$” with an Australian ABN/GST/BPAY context) | 572.00, MATCH |
 
-The `INV-06`/`HLD-08` retries are one command away whenever the vision route has quota (`python main.py --only "INV-06,HLD-08"` followed by the validator): both need pixels, not OCR text — the receipt's zero-rated markers and the invoice's exact amounts are visual facts. The acceptance gates stay in force, so a retry can only improve a record, never regress one.
-
-### Known structural weakness, flagged not hidden
-
-`INV-06` (tax-inclusive grocery receipt) **books exactly (1,683.98)** but the current extraction keeps the inclusive amounts as net prices with an empty VAT entry, so the VAT is carried inside the prices instead of being represented as the printed header tax (169.83, 15%). The `DECLARED_TAX_NOT_REPRESENTED` quality check flags exactly this pattern so it cannot silently pass as structurally clean. The faithful re-representation (net line bases plus the printed header VAT, zero-rated items taken from the receipt's own marks) is mandated by the prompt rules; a text-route retry represented the VAT correctly but could not see the zero-rated row marks, so the exact previous record is retained and the flag stays visible until a vision pass runs.
-
-Remaining pending re-reads (all already book to the cent): `INV-06` (tax representation, above), `HLD-08` (`po_number` should capture `9267418170` printed under “Your Reference”), and `HLD-05` (the artifact restates each printed incidence base as a quantity-1 line — two strong-model attempts still produced that form, the gate rejected both, and the exact record was kept; the fully faithful representation is proven to book exactly 1,037.94 in a regression test). At creation time these were one provider-quota window away; the general prompt rules that address them are in place. See `REVIEW_NOTES.md` for the complete list.
+The `HLD-05` faithful form was independently proven exact against the unchanged ERP by a regression test before the extraction existed; the extraction now matches it line-for-line.
 
 ## How the difficult documents were resolved (all verified against the source pages)
 
-- **INV-06** — tax-inclusive grocery receipt with zero-rated items. Books exactly (1,683.98); currently flagged for the tax representation described above. The general rule that fixes the representation is in the prompt for the next run.
-- **INV-19** — Ghanaian invoice; the page prints `GH₵`, and the output now carries the current ISO code **GHS**. A legacy-currency normalization table (`GHC`/`GH₵` → `GHS`) is implemented in `normalization.py`, tested, and replayed over existing outputs.
+- **INV-06** — tax-inclusive grocery receipt with zero-rated items. The printed VAT (169.83) is now a header tax component; taxable lines carry net bases, zero-rated items keep printed amounts, delivery is modeled at its net amount with its VAT inside the printed total. Books 1,683.98 exactly.
+- **INV-19** — Ghanaian invoice; the page prints `GH₵`, and the output carries the current ISO code **GHS** (legacy-currency normalization, tested).
 - **INV-21** — Portuguese invoice with a line discount, a trailing-minus credit row, and a totals-block IVA. Resolved by the discount-once rule plus the deterministic quantity resolver (`24,000` read as 24.00) and exact header tax; books 535.79.
 - **INV-25** — tax-inclusive print shop (“P.VENDA C/IVA”). Net unit prices derived from the printed inclusive amounts; books 176.00.
-- **INV-26** — 35-row Malaysian sales invoice. Two independent high-magnification reads of the page missed the amount of row 30 (printed alongside the “Northwind Consulting SA” section label) and could not foot the table to the printed 873.53. The deterministic **completeness signal** (extracted line sums that reproduce no printed total) flagged the draft, drove a corrective re-read, and the faithful 35-row extraction now sums exactly to the printed total. No number was adjusted to close the gap.
+- **INV-26** — 35-row Malaysian sales invoice. Two independent high-magnification reads of the page missed the amount of row 30 (printed alongside the “Northwind Consulting SA” section label) and could not foot the table to the printed 873.53. The deterministic **completeness signal** flagged the draft, drove a corrective re-read, and the faithful 35-row extraction now sums exactly to the printed total. No number was adjusted to close the gap.
 - **INV-37** — utility reimbursement whose displayed tax roundings (105.60 / 7.02) do not match its own printed net. The deterministic **printed-formula snapper** submits the least-precision products of the printed rate and the uniquely identifiable bases (**105.597 / 7.015**, uniform 3-dp), reproducing the document’s own net 2,487.73 exactly without exploiting float artifacts or inventing precision.
-- **HLD-05** — Portuguese Fatura with embedded excise and VAT presented at both levels. The deterministic **duplicate-tax-level resolver** cleared the line-level copies because doing so reproduces the printed gross exactly (835.27 + 176.87 + 25.80 deposit = 1,037.94). Independently, the *fully faithful* representation was proven against the unchanged ERP (regression test): source quantities/unit prices/discount percentages + header VAT with printed amounts (19.82/157.05) + the printed IEC excise as `excise_duties` (88.33) + deposit lines also books **1,037.94 exactly**. The artifact will carry that representation on the next vision pass; nothing about the excise is ever inferred.
+- **HLD-05** — Portuguese Fatura with embedded excise and VAT presented at both levels. The faithful record now carries the source quantities/unit prices/discounts, the printed taxes once at the header, the printed IEC excise total and the untaxed deposits — 1,037.94 exactly. Nothing about the excise is inferred.
 - **DU-03** — a 12-page shipment dossier yielding two payables (freight invoice 1,040.06 USD; goods invoice 4,499.00 EUR via the chunked text route), with permits/waybills declined.
 
 ## Master-data investigation (systematic blanks, never fabricated)
@@ -53,12 +54,11 @@ The supplied masters are samples. Reading the issuer blocks on the pages shows t
 
 ## Provider verification (live-tested, not assumed)
 
-- **Gemini** — key pool of mixed formats (`AIza…` and `AQ.…`) parsed, health-probed, rotated; daily per-model buckets observed (20/day/model on this account) and rolled automatically; `gemini-3.8-flash` is the strongest reader for dense scans (it resolved the 35-row invoice after lower-tier routes failed).
-- **Groq** — `qwen/qwen3.8-27b` and `openai/gpt-oss-20b` live; free tier observed at ~8,000 tokens/minute, so long documents are auto-split into page-aware parts and merged; per-model completion caps enforced (qwen 16,384).
-- **OpenRouter** — live; free-model quota verified (`free_model_daily_requests: 50/day`); `nvidia/nemotron-3.5-super-vl:free` reads invoice images, and reasoning is explicitly disabled for extraction turns (reasoning models otherwise burn the token budget and emit empty completions — observed and fixed); upstream-rate-limited models are parked without poisoning the key.
-- **Cloudflare Workers AI** — live; `@cf/meta/llama-4-scout-17b-16e-instruct` accepts image parts (≈0.5 neurons/call); vision capability is gated by a verified model registry so images are never sent to a text-only model.
-- **Budgets** — per-document extraction/repair wall-clock budgets and tighter HTTP read timeouts bound slow free-tier queues (a 40-minute pathological stall was observed and eliminated; per-document worst case is now minutes, not hours).
-- **Live smoke test** — `tests/test_live_smoke.py` exercises one real document end-to-end; it is skipped by default and runs only with `PAYABLE_AI_LIVE_SMOKE=1` and working credentials (not available at the final packaging time; it is NOT claimed as run).
+- **Gemini** — key pools of mixed formats (`AIza…`, `AQ.…`) parsed, health-probed, rotated; daily per-model buckets observed (20/day/model) and rolled automatically; 503/overload handled as transient, exhausted buckets fail fast. `gemini-3.6-flash` / `gemini-3-flash-preview` resolved the dense scans that the text route could not.
+- **Groq** — `qwen/qwen3.8-27b`, `openai/gpt-oss-20b`, `openai/gpt-oss-120b` live; free tier observed at ~8,000 tokens/minute, so long documents auto-split into page-aware parts and merge; per-model completion caps enforced (qwen 16,384); decommissioned model IDs are rejected by the ladder instead of crashing.
+- **OpenRouter / Cloudflare Workers AI** — adapters implemented and previously verified live (OpenRouter free-model quota 50/day; Cloudflare scout accepts image parts ≈0.5 neurons/call with a verified vision registry); they were not configured in the final credential set, so the final runs used Gemini + Groq.
+- **Budgets** — per-document extraction/repair wall-clock budgets and HTTP read timeouts bound slow free-tier queues (a 40-minute pathological stall was observed and eliminated).
+- **Live smoke test** — `tests/test_live_smoke.py` exercises one real document end-to-end; it is skipped by default and runs only with `PAYABLE_AI_LIVE_SMOKE=1` and working credentials.
 
 ## Redaction and hygiene
 

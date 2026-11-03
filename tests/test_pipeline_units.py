@@ -173,10 +173,136 @@ def test_printed_formula_tax_snaps_to_exact_product():
     }
     resolved, changes = recompute_printed_formula_taxes(payable)
     amounts = [t["tax_amount"] for t in resolved["taxes"]]
-    assert amounts[0] == "105.597025" and amounts[1] == "7.015"
+    # Least uniform precision that reproduces the printed net exactly (3 decimals).
+    assert amounts == ["105.597", "7.015"]
     assert any(c["kind"] == "PRINTED_FORMULA_TAX_SNAPPED" for c in changes)
     from erp import erp_book
     assert round(erp_book(resolved)["will_book_gross"], 2) == 2487.73
+
+
+def test_printed_formula_precision_hygiene_on_already_exact_record():
+    from payable_ai.validation import recompute_printed_formula_taxes
+    # The record already books exactly, but one amount carries six decimals;
+    # precision hygiene trims both formula-derived amounts to a uniform level.
+    payable = {
+        "currency": "USD", "gross_total": "2487.73", "total_tax_amount": "112.62",
+        "discount_amount": "", "freight_charges": "", "insurance_charges": "", "extra_charges": "", "excise_duties": "",
+        "taxes": [
+            {"tax_type": "TAX", "tax_name": "Sales tax", "tax_rate": "5.75", "tax_amount": "105.597025", "tax_type_code": ""},
+            {"tax_type": "TAX", "tax_name": "Sales tax", "tax_rate": "5.75", "tax_amount": "7.015", "tax_type_code": ""},
+        ],
+        "line_items": [
+            {"description": "electric", "quantity": "1", "unit_price": "1570.37", "total": "1570.37", "discount": "", "discount_percentage": "", "tax_rate": "", "tax_amount": "", "taxes": []},
+            {"description": "demand", "quantity": "1", "unit_price": "266.10", "total": "266.10", "discount": "", "discount_percentage": "", "tax_rate": "", "tax_amount": "", "taxes": []},
+            {"description": "energy", "quantity": "1", "unit_price": "393.47", "total": "393.47", "discount": "", "discount_percentage": "", "tax_rate": "", "tax_amount": "", "taxes": []},
+            {"description": "pm", "quantity": "1", "unit_price": "23.18", "total": "23.18", "discount": "", "discount_percentage": "", "tax_rate": "", "tax_amount": "", "taxes": []},
+            {"description": "building", "quantity": "1", "unit_price": "122.00", "total": "122.00", "discount": "", "discount_percentage": "", "tax_rate": "", "tax_amount": "", "taxes": []},
+        ],
+    }
+    resolved, changes = recompute_printed_formula_taxes(payable)
+    assert [t["tax_amount"] for t in resolved["taxes"]] == ["105.597", "7.015"]
+    from erp import erp_book
+    assert round(erp_book(resolved)["will_book_gross"], 2) == 2487.73
+
+
+def test_legacy_currency_codes_map_to_current_iso():
+    from payable_ai.normalization import normalize_currency_code, normalize_payable
+    from payable_ai.master_data import MasterData
+    assert normalize_currency_code("GHC") == "GHS"
+    assert normalize_currency_code("ghc") == "GHS"
+    assert normalize_currency_code("GH₵") == "GHS"
+    assert normalize_currency_code("EUR") == "EUR"
+    assert normalize_currency_code("") == ""
+    normalized, _ = normalize_payable({"currency": "GHC"}, MasterData(ROOT / "master_data"))
+    assert normalized["currency"] == "GHS"
+
+
+def test_quality_flags_declared_tax_that_no_component_represents():
+    from payable_ai.quality import semantic_issues
+    embedded = {
+        "invoice_type": "INVOICE", "currency": "ZAR", "invoice_number": "X-1", "gross_total": "1683.98",
+        "subtotal": "1633.98", "total_tax_amount": "169.83", "discount_amount": "", "freight_charges": "50.00",
+        "insurance_charges": "", "extra_charges": "", "excise_duties": "",
+        "taxes": [{"tax_type": "VAT", "tax_name": "VAT", "tax_rate": "", "tax_amount": "", "tax_type_code": ""}],
+        "line_items": [{"description": "x", "quantity": "1", "unit_price": "44.99", "total": "44.99",
+                        "discount": "", "discount_percentage": "", "tax_rate": "", "tax_amount": "", "taxes": []}],
+    }
+    codes = {issue["code"] for issue in semantic_issues(embedded)}
+    assert "DECLARED_TAX_NOT_REPRESENTED" in codes
+
+    represented = dict(embedded)
+    represented["taxes"] = [{"tax_type": "VAT", "tax_name": "VAT", "tax_rate": "15", "tax_amount": "169.83", "tax_type_code": ""}]
+    codes = {issue["code"] for issue in semantic_issues(represented)}
+    assert "DECLARED_TAX_NOT_REPRESENTED" not in codes
+
+
+def test_repair_rejects_changes_to_irrelevant_fields():
+    from payable_ai.validation import apply_grounded_repairs
+    raw = {"invoice_number": "A-1", "line_items": [{"unit_price": "10.00"}]}
+    repair = {"changes": [
+        {"path": "invoice_number", "value": "B-2", "evidence_quote": "Invoice number B-2 printed", "reason": "typo"},
+        {"path": "line_items[0].taxes[0].tax_rate", "value": "19", "evidence_quote": "VAT 19%", "reason": "irrelevant"},
+    ]}
+    source = "Invoice number B-2 printed. VAT 19%."
+    fixed, logs = apply_grounded_repairs(raw, repair, source)
+    assert fixed["invoice_number"] == "A-1"  # not an ERP input: never editable
+    assert all(entry["accepted"] is False for entry in logs)
+
+
+def test_hld05_faithful_representation_books_exactly():
+    """Source facts verified against the two pages of HLD-05.pdf.
+
+    The document prints, per goods line, a real quantity, a net unit price and a
+    promotional discount percentage; the totals block prints the VAT amounts per
+    rate (19.82 at 13%, 157.05 at 23%), the IEC excise total (88.33) and two
+    untaxed container deposits (162 x 0.10; 96 x 0.10). Submitting those source
+    values — quantities and unit prices, taxes once at the header with the
+    printed amounts, the printed excise as excise_duties, deposits as untaxed
+    lines — reproduces the owed amount (sub-total incl. VAT 1,012.14 + deposits
+    25.80 = 1,037.94) through the unchanged ERP.
+    """
+    from erp import erp_book
+
+    goods = [
+        ("SAGRES Branca Gfa Tab 6x1L PT", "40", "14.76", "54.080"),
+        ("HEINEKEN Barril OW 5L PT", "6", "24.53", "61.240"),
+        ("SAGRES Branca Gfa Tab 4(6x25cl) PT 201a", "1", "24.96", "63.500"),
+        ("SAGRES Branca Gfa Cxa 20x25cl PT 201a", "9", "20.80", "66.290"),
+        ("CASTELLO Original Gfa SW 4(6x25cl) 404a", "7", "20.40", "60.530"),
+        ("LUSO PET SW 6x1,5L SDR", "27", "6.72", "65.110"),
+        ("LUSO PET SW 4(6x50cl) SDR", "4", "14.64", "44.040"),
+        ("DECVAKUGZK Gfa Cxa 4(6x33cl) ES", "1", "48.00", "56.600"),
+        ("HEINEKEN Gfa Cxa 18x25cl PT", "4", "18.72", "57.150"),
+        ("HEINEKEN Gfa Tab 4(6x25cl) PT", "7", "24.96", "53.930"),
+        ("SAGRES Branca Gfa SW 2(10x25cl) PT 201a", "8", "20.80", "63.510"),
+    ]
+    lines = [
+        {"description": desc, "item_type": "GOODS", "uom": "", "quantity": qty,
+         "unit_price": price, "total": "", "discount": "", "discount_percentage": pct,
+         "tax_rate": "", "tax_amount": "", "taxes": []}
+        for desc, qty, price, pct in goods
+    ]
+    lines.extend([
+        {"description": "Depósito SDR", "item_type": "GOODS", "uom": "UND", "quantity": "162",
+         "unit_price": "0.10", "total": "", "discount": "", "discount_percentage": "",
+         "tax_rate": "0", "tax_amount": "", "taxes": []},
+        {"description": "Depósito SDR", "item_type": "GOODS", "uom": "UND", "quantity": "96",
+         "unit_price": "0.10", "total": "", "discount": "", "discount_percentage": "",
+         "tax_rate": "0", "tax_amount": "", "taxes": []},
+    ])
+    payable = {
+        "currency": "EUR", "gross_total": "1037.94", "subtotal": "835.27", "total_tax_amount": "176.87",
+        "discount_amount": "", "freight_charges": "", "insurance_charges": "",
+        "extra_charges": "", "excise_duties": "88.33",
+        "taxes": [
+            {"tax_type": "VAT", "tax_name": "IVA 13%", "tax_rate": "13", "tax_amount": "19.82", "tax_type_code": ""},
+            {"tax_type": "VAT", "tax_name": "IVA 23%", "tax_rate": "23", "tax_amount": "157.05", "tax_type_code": ""},
+        ],
+        "line_items": lines,
+    }
+    assert round(erp_book(payable)["will_book_gross"], 2) == 1037.94
+    assert payable["excise_duties"] == "88.33"
+    assert lines[0]["quantity"] == "40" and lines[0]["unit_price"] == "14.76"
 
 
 def test_component_resolver_fills_empty_quantity_from_exact_quotient():

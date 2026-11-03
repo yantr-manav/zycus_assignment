@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 import copy
 import json
 import re
@@ -49,7 +49,7 @@ def resolve_line_components(payable: dict[str, Any]) -> tuple[dict[str, Any], li
     """Restore a math-certain component when the printed row arithmetic pins it.
 
     Determinism boundary: when a line prints unit price, discount and row total,
-    the quantity is *provable* — it is the only positive value whose ERP line
+    the quantity is *provable* â€” it is the only positive value whose ERP line
     base reproduces the printed total. This catches locale misreads and pack
     scaling (e.g. "24,000" read as 24000 when 24 is the only solution) without
     ever using the gross target. Applied only when the solution is exact: any
@@ -129,7 +129,7 @@ def resolve_line_components(payable: dict[str, Any]) -> tuple[dict[str, Any], li
         if base is not None and abs(base - total) <= 0.005:
             continue
         # If a tax rate explains the gap, the printed total is simply
-        # tax-inclusive — that is not a quantity error, and a tax-inclusive
+        # tax-inclusive â€” that is not a quantity error, and a tax-inclusive
         # total must never be used to "solve" for the quantity.
         if base is not None and base > 0:
             line_rates = []
@@ -229,7 +229,7 @@ def resolve_duplicate_taxes(payable: dict[str, Any]) -> tuple[dict[str, Any], li
 
     Determinism boundary: when the same nonzero rate appears in taxes[] and on
     line(s), the record double-charges it by construction. Which copy to keep is
-    not guessed — a variant is committed only when it lands *exactly* on the
+    not guessed â€” a variant is committed only when it lands *exactly* on the
     printed gross, with the header copy (which carries the document's printed
     amount) preferred. If no variant reproduces the printed gross, the record is
     left untouched and the mismatch stays flagged for review.
@@ -287,7 +287,7 @@ def resolve_duplicate_taxes(payable: dict[str, Any]) -> tuple[dict[str, Any], li
             "field_path": f"line_items{[i for i in duplicated_line_indexes]}.tax_rate",
             "message": (
                 f"the same tax rate(s) {sorted(header_rates)} were placed on both line(s) {duplicated_line_indexes} "
-                "and in taxes[]; the ERP sums the levels independently, so the line copies were removed — "
+                "and in taxes[]; the ERP sums the levels independently, so the line copies were removed â€” "
                 "the corrected draft reproduces the printed gross exactly."
             ),
         })
@@ -323,7 +323,7 @@ def resolve_duplicate_taxes(payable: dict[str, Any]) -> tuple[dict[str, Any], li
             "field_path": "taxes",
             "message": (
                 f"the same tax rate(s) {sorted(line_rates)} were placed on both lines and in taxes[]; the header "
-                "copies were removed — the corrected draft reproduces the printed gross exactly."
+                "copies were removed â€” the corrected draft reproduces the printed gross exactly."
             ),
         })
         return trial2, changes
@@ -335,7 +335,7 @@ def recompute_printed_formula_taxes(payable: dict[str, Any]) -> tuple[dict[str, 
 
     Some documents print a tax as "rate applied to a named base" and display the
     rounded figure, while the printed net amount is computed from the *unrounded*
-    product — leaving the faithful-looking components one or two cents off. When
+    product â€” leaving the faithful-looking components one or two cents off. When
     a header tax's base is uniquely identifiable among the line bases (only one
     subset of lines reproduces the stated amount from the stated rate), the
     amount becomes that exact product. Committed only when the corrected draft
@@ -346,8 +346,15 @@ def recompute_printed_formula_taxes(payable: dict[str, Any]) -> tuple[dict[str, 
     if printed is None:
         return payable, changes
     booked = _booked_gross(payable)
-    if booked is None or booked == printed or abs(booked - printed) > 0.05:
+    if booked is None or abs(booked - printed) > 0.05:
         return payable, changes
+    # Two operating modes, both exact-gated against the printed gross:
+    #  * booked != printed â€” the displayed rounding of a printed formula hides
+    #    the value the document's own arithmetic used (normal snapping);
+    #  * booked == printed â€” the record is exact, but a formula-derived amount
+    #    may still carry more decimal places than the document warrants
+    #    (precision hygiene: trim to the least precision that stays exact).
+    refining_only = booked == printed
 
     lines = payable.get("line_items") or []
     if len(lines) > 20:
@@ -395,9 +402,8 @@ def recompute_printed_formula_taxes(payable: dict[str, Any]) -> tuple[dict[str, 
                     return matches
         return matches
 
-    trial = copy.deepcopy(payable)
-    snapped_any = False
-    for tax_index, tax in enumerate(trial.get("taxes") or []):
+    snapable: list[tuple[int, Decimal, Decimal]] = []
+    for tax_index, tax in enumerate(payable.get("taxes") or []):
         if not isinstance(tax, dict):
             continue
         rate = _parse_number(tax.get("tax_rate"))
@@ -408,27 +414,54 @@ def recompute_printed_formula_taxes(payable: dict[str, Any]) -> tuple[dict[str, 
         if len(matches) != 1:
             continue
         base_sum = round(sum(line_bases[i] for i in matches[0]), 2)
-        # Exact decimal product of the printed base and the printed rate — the
-        # document's own formula, without float noise.
+        # The document's own formula, evaluated exactly in decimal: the stated
+        # rate applied to the uniquely identifiable base.
         exact_product = Decimal(str(base_sum)) * Decimal(str(rate)) / Decimal("100")
-        if abs(exact_product - Decimal(str(amount))) <= Decimal("0.02") and abs(exact_product - Decimal(str(amount))) > Decimal("1e-9"):
-            trial["taxes"][tax_index]["tax_amount"] = _format_amount(exact_product)
-            snapped_any = True
-    if not snapped_any:
+        printed_amount = Decimal(str(tax.get("tax_amount", "")).strip() or "0")
+        difference = abs(exact_product - printed_amount)
+        if refining_only:
+            # Precision hygiene only applies when the current amount already IS
+            # the exact formula product (otherwise it is not ours to trim).
+            if difference > Decimal("1e-9"):
+                continue
+        elif not (Decimal("1e-9") < difference <= Decimal("0.02")):
+            # Normal mode: the displayed rounding must differ from the product,
+            # and the product must still sit within a rounding-cent of the print.
+            continue
+        # Prefer the LEAST uniform precision that still reproduces the printed
+        # gross with exact decimal arithmetic: a displayed rounding artifact
+        # should not be answered with invented decimal places, and mixed
+        # per-tax precisions are not a defensible representation.
+        snapable.append((tax_index, printed_amount, exact_product))
+    if not snapable:
         return payable, changes
-    if _booked_gross(trial) == printed:
-        for tax_index, original in enumerate(payable.get("taxes") or []):
-            new_amount = trial["taxes"][tax_index]["tax_amount"]
-            if isinstance(original, dict) and new_amount != original.get("tax_amount"):
+
+    for decimals in (2, 3, 4, None):
+        trial = copy.deepcopy(payable)
+        accepted_amounts: list[Decimal] = []
+        viable = True
+        for tax_index, printed_amount, exact_product in snapable:
+            amount_value = exact_product if decimals is None else exact_product.quantize(Decimal(1).scaleb(-decimals))
+            if abs(amount_value - printed_amount) > Decimal("0.02"):
+                viable = False
+                break
+            trial["taxes"][tax_index]["tax_amount"] = _format_amount(amount_value)
+            accepted_amounts.append(amount_value)
+        if not viable or _booked_gross(trial) != printed:
+            continue
+        for (tax_index, _, _), amount_value in zip(snapable, accepted_amounts):
+            formatted = _format_amount(amount_value)
+            if formatted != str(payable["taxes"][tax_index]["tax_amount"]):
                 changes.append({
                     "kind": "PRINTED_FORMULA_TAX_SNAPPED",
                     "field_path": f"taxes[{tax_index}].tax_amount",
-                    "before": str(original.get("tax_amount", "")),
-                    "after": new_amount,
+                    "before": str(payable["taxes"][tax_index]["tax_amount"]),
+                    "after": formatted,
                     "message": (
-                        f"tax {original.get('tax_name', '')!r}: the document states the rate {original.get('tax_rate')} "
-                        f"applied to a uniquely identifiable base; the exact product {new_amount} (vs the rounded "
-                        f"display {original.get('tax_amount')!r}) reproduces the printed gross exactly."
+                        f"tax {payable['taxes'][tax_index].get('tax_name', '')!r}: the document states the rate "
+                        f"{payable['taxes'][tax_index].get('tax_rate')} applied to a uniquely identifiable base; "
+                        f"the least-precision product ({formatted}, vs the rounded display "
+                        f"{payable['taxes'][tax_index]['tax_amount']!r}) reproduces the printed gross exactly."
                     ),
                 })
         return trial, changes
@@ -585,7 +618,7 @@ def _path_context_ok(path: str, quote: str) -> bool:
             return False
     elif leaf == "tax_amount":
         cues = ("taxamount", "vatamount", "gstamount", "taxvalue", "withholding", "taxdeducted", "amountoftax", "tax charged", "vat charged", "gst charged")
-        has_amount_marker = any(c in q for c in ("amount", "value", "withholding", "deducted", "charged", "payable tax")) or any(c in q_raw for c in ("€", "$", "£", "¥", "₹"))
+        has_amount_marker = any(c in q for c in ("amount", "value", "withholding", "deducted", "charged", "payable tax")) or any(c in q_raw for c in ("â‚¬", "$", "Â£", "Â¥", "â‚¹"))
         has_tax_label = any(c in q for c in ("tax", "vat", "gst", "mwst", "nhil", "getfl", "iva", "withholding"))
         if not (has_amount_marker and has_tax_label):
             return False
@@ -671,7 +704,7 @@ def _grounded_quote(path: str, quote: str, proposed_value: str, source_text: str
     proposed_number = canonical_number(str(proposed_value))
     if not proposed_number:
         return False, "proposed value is not a normalizable number"
-    number_pattern = re.compile(r"(?<![A-Za-z])[-+]?\(?\d[\d.,'’ ]*\d?%?\)?(?![A-Za-z])")
+    number_pattern = re.compile(r"(?<![A-Za-z])[-+]?\(?\d[\d.,'â€™ ]*\d?%?\)?(?![A-Za-z])")
 
     # Rule 1 of the brief: every value the system emits must appear on the document.
     # This also stops a fuzzy quote match from smuggling in a value that differs from
@@ -738,7 +771,7 @@ def _grounded_quote(path: str, quote: str, proposed_value: str, source_text: str
             continue
         if leaf == "tax_amount":
             nearby = quote[max(0, start - 12):min(len(quote), end + 16)]
-            has_currency = any(symbol in nearby for symbol in ("€", "$", "£", "¥", "₹"))
+            has_currency = any(symbol in nearby for symbol in ("â‚¬", "$", "Â£", "Â¥", "â‚¹"))
             has_amount_label = any(word in norm_text(nearby) for word in ("amount", "value", "charged", "withheld", "deducted"))
             if not (has_currency or has_amount_label):
                 continue

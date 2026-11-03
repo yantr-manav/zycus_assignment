@@ -2,16 +2,16 @@
   "file": "INV-01.pdf",
   "payables": [
     {
-      "invoice_number": "352566",
+      "invoice_number": "852566",
       "invoice_date": "2026-02-02",
       "due_date": "2026-02-12",
       "invoice_type": "INVOICE",
       "currency": "EUR",
       "supplier": {
-        "name": "Northwind Operations OU",
+        "name": "",
         "supplier_id": "",
-        "address": "Lindenstrasse 15\n10134 Estonia",
-        "vat_id": "E\u00a3398766194"
+        "address": "",
+        "vat_id": ""
       },
       "buyer": {
         "company_code": "",
@@ -35,7 +35,7 @@
           "tax_name": "MwSt",
           "tax_rate": "0",
           "tax_amount": "0.00",
-          "tax_type_code": "EST_000_VAT"
+          "tax_type_code": ""
         }
       ],
       "line_items": [

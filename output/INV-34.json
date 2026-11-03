@@ -6,7 +6,7 @@
       "invoice_date": "2015-06-20",
       "due_date": "2015-06-27",
       "invoice_type": "INVOICE",
-      "currency": "",
+      "currency": "AUD",
       "supplier": {
         "name": "Asian Pacific Serviced Offices Pty Ltd",
         "supplier_id": "",
@@ -33,7 +33,7 @@
         {
           "tax_type": "GST",
           "tax_name": "GST",
-          "tax_rate": "",
+          "tax_rate": "10",
           "tax_amount": "52.00",
           "tax_type_code": ""
         }

@@ -89,12 +89,21 @@ def semantic_issues(payable: dict[str, Any]) -> list[dict[str, str]]:
         if quantity is None or price is None:
             add("INCOMPLETE_LINE_COMPONENTS", "warning", f"line_items[{index}] lacks quantity or net unit_price; the ERP base may be undercounted")
         elif printed_line_total is not None:
-            base = quantity * price
+            gross_extension = quantity * price
+            net_extension = gross_extension
+            discounted = False
             if discount_pct is not None and discount_pct > 0:
-                base = (base - base * discount_pct / Decimal("100")).quantize(Decimal("0.01"))
+                net_extension = (gross_extension - gross_extension * discount_pct / Decimal("100")).quantize(Decimal("0.01"))
+                discounted = True
             elif discount_amt is not None and discount_amt > 0 and quantity != 0:
-                base = (price - discount_amt / abs(quantity)) * quantity
-            if abs(base - printed_line_total) > Decimal("0.02"):
+                net_extension = (price - discount_amt / abs(quantity)) * quantity
+                discounted = True
+            matches = abs(net_extension - printed_line_total) <= Decimal("0.02")
+            if not matches and discounted:
+                # Some documents print the row extension before the discount is
+                # applied; the discount column then explains the ERP's net base.
+                matches = abs(gross_extension - printed_line_total) <= Decimal("0.02")
+            if not matches:
                 add(
                     "LINE_EXTENSION_MISMATCH", "warning",
                     f"line_items[{index}] quantity × net unit price minus discount differs from printed total; inspect whether line total includes tax or has different semantics",

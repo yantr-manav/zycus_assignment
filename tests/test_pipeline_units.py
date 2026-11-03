@@ -249,6 +249,31 @@ def test_repair_rejects_changes_to_irrelevant_fields():
     assert all(entry["accepted"] is False for entry in logs)
 
 
+def test_quality_accepts_printed_extension_before_or_after_discount():
+    from payable_ai.quality import semantic_issues
+
+    def codes(payable):
+        return {issue["code"] for issue in semantic_issues(payable)}
+
+    base = {
+        "invoice_type": "INVOICE", "currency": "EUR", "invoice_number": "A-1", "gross_total": "271.11",
+        "subtotal": "", "total_tax_amount": "", "discount_amount": "", "freight_charges": "",
+        "insurance_charges": "", "extra_charges": "", "excise_duties": "", "taxes": [],
+    }
+    # Pre-discount extension printed (59.040 x ...): qty x price equals the printed total.
+    pre = dict(base, line_items=[{"description": "x", "quantity": "40", "unit_price": "14.76", "total": "590.40",
+                                  "discount": "", "discount_percentage": "54.080", "tax_rate": "", "tax_amount": "", "taxes": []}])
+    assert "LINE_EXTENSION_MISMATCH" not in codes(pre)
+    # Post-discount extension printed: the ERP's net base equals the printed total.
+    post = dict(base, line_items=[{"description": "x", "quantity": "1", "unit_price": "407.95", "total": "407.95",
+                                   "discount": "", "discount_percentage": "", "tax_rate": "", "tax_amount": "", "taxes": []}])
+    assert "LINE_EXTENSION_MISMATCH" not in codes(post)
+    # Neither extension matches: flagged.
+    wrong = dict(base, line_items=[{"description": "x", "quantity": "2", "unit_price": "40.00", "total": "100.00",
+                                    "discount": "", "discount_percentage": "", "tax_rate": "", "tax_amount": "", "taxes": []}])
+    assert "LINE_EXTENSION_MISMATCH" in codes(wrong)
+
+
 def test_hld05_faithful_representation_books_exactly():
     """Source facts verified against the two pages of HLD-05.pdf.
 
